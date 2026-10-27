@@ -260,6 +260,15 @@ const params = new URLSearchParams(location.search)
 const cwd = params.get('cwd') ?? ''
 const projectName = cwd.split(/[\\/]/).filter(Boolean).pop() ?? '未指定项目'
 
+/**
+ * Plan 模式下加在用户消息前面的只读约束。
+ *
+ * 它必须真的进入模型上下文，所以不能换成纯展示层；但它是面板自己加的，
+ * 用户不该在聊天记录里反复看到。渲染时按这个常量剥掉。
+ */
+const PLAN_PREFIX = '[只读模式] 本轮只允许读取和分析，不要修改文件或执行写操作。'
+  + String.fromCharCode(10, 10)
+
 const el = (id) => document.getElementById(id)
 const thread = el('thread')
 const empty = el('empty')
@@ -353,6 +362,11 @@ function isInjected(text) {
     || head.startsWith('Time sampled')
     // 模式切换时自动发给模型的续跑指令，不是用户手动输入的内容。
     || head.startsWith('【模式已切换】')
+}
+
+/** 展示用：把面板自己加的 Plan 只读前缀剥掉，模型上下文里仍然保留。 */
+function visibleUserText(text) {
+  return text.startsWith(PLAN_PREFIX) ? text.slice(PLAN_PREFIX.length) : text
 }
 
 /** 只转义会破坏结构的字符；Markdown 规则随后再套。 */
@@ -593,7 +607,7 @@ function renderThread() {
       const text = textOf(event.data?.content)
       if (text && !isInjected(text)) {
         flushGroup()
-        rows.push({ kind: 'user', text })
+        rows.push({ kind: 'user', text: visibleUserText(text) })
       }
       continue
     }
@@ -1013,8 +1027,7 @@ async function ensureSession() {
   sidLabel.textContent = sessionId.slice(-8)
 }
 
-/** 首屏：先拿一次分页快照，旧服务端也能立即显示历史；随后升级到 SSE。 */
-async function loadInitial() {
+/** 首屏：先拿一次分页快照，旧服务端也能立即显示历史；随后升级到 SSE。 */async function loadInitial() {
   setStatus('ok')
   const page = await readPage(sessionId)
   const records = Array.isArray(page?.records) ? page.records : []
@@ -1036,7 +1049,6 @@ async function send() {
   try {
     // Plan 模式没有服务端开关：DSH 的 /plan 是客户端命令，API 不接受。
     // 这里用一条明确的指令约束模型只出方案，服务端另有 tools.guard 硬拦。
-    const PLAN_PREFIX = '[只读模式] 本轮只允许读取和分析，不要修改文件或执行写操作。' + String.fromCharCode(10, 10)
     const text2 = planMode ? PLAN_PREFIX + text : text
     await promptText(text2)
     input.value = ''

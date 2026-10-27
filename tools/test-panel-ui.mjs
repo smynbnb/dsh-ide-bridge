@@ -374,6 +374,18 @@ await tick(40)
 assert.equal(promptRequests().length, beforePlanAgain, 'switching to Plan does not auto-send')
 await tick(20)
 
+// The Plan read-only prefix is model input only; it must not clutter the bubble.
+const planPrefix = '[只读模式] 本轮只允许读取和分析，不要修改文件或执行写操作。\n\n'
+push('event', {
+  type: 'user/message',
+  seq: 3,
+  time: 6,
+  data: { role: 'user', content: [{ type: 'text', text: planPrefix + '把按钮颜色改一下' }], source: { kind: 'user' } },
+})
+await tick()
+assert.ok(thread.textContent.includes('把按钮颜色改一下'), 'plan message text is shown')
+assert.ok(!thread.textContent.includes('只读模式'), 'plan prefix is hidden from the transcript')
+
 // Approval: the card becomes visible with the tool name.
 push('approval', {
   id: 'appr-1',
