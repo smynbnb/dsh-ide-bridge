@@ -1,0 +1,1317 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH</title>
+<script>
+  // 首屏防闪：IDE 插件每次注入都会把配色记进 localStorage，
+  // 下次加载在样式生效前先套上，避免深色 IDE 里先白一下。
+  try {
+    var saved = JSON.parse(localStorage.getItem('dsh-ide-theme') || 'null')
+    if (saved && typeof saved === 'object') {
+      var root = document.documentElement
+      root.dataset.theme = saved.dark ? 'dark' : 'light'
+      if (saved.contrast) root.dataset.contrast = 'high'
+      if (saved.vars) for (var key in saved.vars) root.style.setProperty(key, saved.vars[key])
+    }
+  } catch (error) {
+    // 首次加载、隐私模式或存储被禁用时走 CSS 默认值。
+  }
+</script>
+<style>
+  /*
+   * 默认值只是浏览器预览/IDE 尚未注入时的兜底。
+   * IDEA 插件会在页面加载后把当前主题的真实颜色写成内联变量，
+   * 所以 Islands、Darcula、高对比、自定义主题都能直接覆盖这里。
+   */
+  :root {
+    --bg:#fff; --bg-soft:#f7f7f8; --bg-raised:#fff; --border:#e3e3e6;
+    --text:#1f2328; --text-dim:#6b7280; --accent:#2563eb; --accent-soft:#eef2ff;
+    --accent-fill:#2563eb; --on-accent:#fff;
+    --tool-bg:#f4f4f5; --user-bg:#eef2ff;
+    --warn:#b45309; --warn-soft:#fff7ed; --warn-border:#f59e0b;
+    --radius:8px;
+    --ui-font:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    --mono:"JetBrains Mono",Consolas,monospace;
+  }
+  :root[data-theme="dark"] {
+    --bg:#1e1f22; --bg-soft:#26282c; --bg-raised:#2b2d31; --border:#393b40;
+    --text:#dfe1e5; --text-dim:#8b8f96; --accent:#6ea8fe; --accent-soft:#2a3350;
+    --accent-fill:#3871e1; --on-accent:#fff;
+    --tool-bg:#2b2d31; --user-bg:#2a3350;
+    --warn:#fbbf24; --warn-soft:#33260f; --warn-border:#b45309;
+  }
+  /* 让 Chromium 的原生滚动条/表单控件跟随深浅，而不是永远白色 */
+  :root[data-theme="dark"] { color-scheme: dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden;
+    background:var(--bg); color:var(--text);
+    font-family:var(--ui-font); font-size:13px; line-height:1.55; }
+  body { display:flex; flex-direction:column; }
+
+  /* 高对比主题：边框和焦点环加粗，避免“颜色对但看不清边界” */
+  :root[data-contrast="high"] .msg.user { border:2px solid var(--border); }
+  :root[data-contrast="high"] .approval,
+  :root[data-contrast="high"] .tool { border-width:2px; }
+  :root[data-contrast="high"] textarea:focus,
+  :root[data-contrast="high"] .btn:focus-visible,
+  :root[data-contrast="high"] .picker-btn:focus-visible {
+    outline:3px solid var(--accent); outline-offset:1px; }
+
+  .topbar { flex:0 0 auto; display:flex; align-items:center; gap:6px;
+    padding:7px 12px; border-bottom:1px solid var(--border); background:var(--bg-soft);
+    font-size:12px; color:var(--text-dim); }
+  .dot { width:6px; height:6px; border-radius:50%; background:#9ca3af; flex:0 0 auto; }
+  .dot.on { background:#22c55e; }
+  .dot.err { background:#ef4444; }
+  .project { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .topbar .spacer { flex:1; }
+  .topbar .feed { font-size:10.5px; opacity:.65; }
+
+  .thread { flex:1 1 auto; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  .empty { color:var(--text-dim); text-align:center; margin-top:32px; font-size:12px; }
+  .msg.user { align-self:flex-end; background:var(--user-bg); padding:8px 10px;
+    border-radius:var(--radius); white-space:pre-wrap; max-width:100%; }
+  .msg.assistant { white-space:pre-wrap; }
+  .msg.assistant code { font-family:var(--mono); font-size:12px;
+    background:var(--tool-bg); padding:1px 4px; border-radius:4px; }
+  .msg.assistant pre { font-family:var(--mono); font-size:12px; background:var(--tool-bg);
+    padding:8px 10px; border-radius:var(--radius); overflow-x:auto; margin:8px 0; }
+  .tool { margin-top:6px; border:1px solid var(--border); border-radius:var(--radius);
+    background:var(--tool-bg); padding:5px 9px; font-size:11.5px; color:var(--text-dim);
+    font-family:var(--mono); display:flex; gap:6px; align-items:center; }
+  .tool .label { color:var(--accent); }
+
+  .composer { flex:0 0 auto; border-top:1px solid var(--border); background:var(--bg-soft);
+    padding:8px 10px 10px; display:flex; flex-direction:column; gap:8px; }
+  .mode-row { display:flex; align-items:center; gap:8px; }
+  .seg { display:inline-flex; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .seg button { border:0; background:transparent; color:var(--text-dim);
+    font:inherit; font-size:12px; padding:3px 12px; cursor:pointer; }
+  .seg button.active { background:var(--accent-fill); color:var(--on-accent); }
+  .hint { font-size:11px; color:var(--text-dim); }
+  textarea { width:100%; resize:none; min-height:56px; max-height:150px; padding:8px 10px;
+    border:1px solid var(--border); border-radius:var(--radius);
+    background:var(--bg-raised); color:var(--text); font:inherit; }
+  textarea:focus { outline:2px solid var(--accent-soft); border-color:var(--accent); }
+  .actions { display:flex; align-items:center; gap:8px; }
+  .actions .spacer { flex:1; }
+  .btn { border:1px solid var(--border); background:var(--bg-raised); color:var(--text);
+    border-radius:6px; padding:5px 14px; font:inherit; font-size:12px; cursor:pointer; }
+  .btn.primary { background:var(--accent-fill); border-color:var(--accent-fill); color:var(--on-accent); }
+  .btn:disabled { opacity:.45; cursor:default; }
+
+  .statusbar { flex:0 0 auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; row-gap:2px;
+    padding:4px 10px; border-top:1px solid var(--border); background:var(--bg);
+    font-size:11.5px; color:var(--text-dim); }
+  .statusbar .spacer { flex:1; }
+  .statusbar .sid { font-family:var(--mono); font-size:10px; opacity:.55; }
+
+  /* 选择器向上弹出，避免被 IDE 窗口下边缘裁掉 */
+  .picker { position: relative; }
+  .picker-btn { border:1px solid transparent; background:transparent; color:var(--text-dim);
+    font:inherit; font-size:11.5px; padding:2px 6px; border-radius:4px; cursor:pointer; }
+  .picker-btn:hover, .picker.open .picker-btn {
+    border-color:var(--border); background:var(--bg-raised); color:var(--text); }
+  .picker-menu { position:absolute; bottom:100%; left:0; margin-bottom:4px;
+    min-width:150px; padding:4px; display:none;
+    background:var(--bg-raised); border:1px solid var(--border); border-radius:6px;
+    box-shadow:0 4px 14px rgba(0,0,0,.22); z-index:30; }
+  .picker.open .picker-menu { display:block; }
+  .picker-menu button { display:block; width:100%; text-align:left; border:0;
+    background:transparent; color:var(--text); font:inherit; font-size:12px;
+    padding:5px 8px; border-radius:4px; cursor:pointer; white-space:nowrap; }
+  .picker-menu button:hover { background:var(--accent-soft); }
+  .picker-menu button.active { color:var(--accent); }
+
+  /* Markdown 渲染 */
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 12px 0 6px; font-weight: 600; line-height: 1.3; }
+  .md h1 { font-size: 16px; } .md h2 { font-size: 15px; } .md h3 { font-size: 14px; }
+  .md p { margin: 6px 0; }
+  .md li { margin: 2px 0 2px 18px; }
+  .md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .md a { color: var(--accent); text-decoration: none; }
+  .md a:hover { text-decoration: underline; }
+  .md pre.md-code { background: var(--tool-bg); padding: 8px 10px; border-radius: 6px;
+    overflow-x: auto; margin: 8px 0; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+  .md code.md-inline { background: var(--tool-bg); padding: 1px 4px; border-radius: 4px;
+    font-family: var(--mono); font-size: 12px; }
+  .md table.md-table { border-collapse: collapse; margin: 8px 0; font-size: 12px; width: 100%; }
+  .md table.md-table th, .md table.md-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .md table.md-table th { background: var(--bg-soft); font-weight: 600; }
+  .md table.md-table tr:nth-child(even) td { background: var(--bg-soft); }
+
+  /* 思考过程：默认折叠 */
+  .reasoning { margin-bottom: 8px; font-size: 12px; color: var(--text-dim); }
+  .reasoning summary { cursor: pointer; user-select: none; outline: none; }
+  .reasoning-body { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--border);
+    white-space: pre-wrap; line-height: 1.5; max-height:240px; overflow-y:auto; }
+
+  /* 工作块：一次任务里的多步工具调用折叠成一行 */
+  .work-group { margin: 2px 0; border-left: 2px solid var(--border); padding-left: 8px; }
+  .work-group > summary { cursor: pointer; user-select: none; outline: none;
+    font-size: 12px; color: var(--text-dim); font-family: var(--mono);
+    padding: 2px 0; list-style: none; }
+  .work-group > summary::-webkit-details-marker { display: none; }
+  .work-group > summary:hover { color: var(--text); }
+  .work-group .tool-list { margin-top: 6px; font-size: 11px; color: var(--text-dim);
+    font-family: var(--mono); line-height: 1.5; word-break: break-all; }
+
+  /* 流式输出：正在增长的回答 */
+  .msg.assistant.live .md { white-space:pre-wrap; }
+  .cursor { display:inline-block; width:6px; height:13px; margin-left:2px;
+    vertical-align:text-bottom; background:var(--accent); animation:blink 1s steps(2) infinite; }
+  @keyframes blink { 0%,50% { opacity:1; } 50.01%,100% { opacity:0; } }
+  .thinking { color:var(--text-dim); font-size:12px; }
+  .thinking::after { content:"…"; animation:blink 1.2s steps(2) infinite; }
+  .live-tools { font-family:var(--mono); font-size:11px; color:var(--text-dim);
+    line-height:1.5; word-break:break-all; }
+  .live-tools .tool-line { margin-top:4px; }
+  .live-tools .label { color:var(--accent); }
+
+  /* 审批记录：回答之后在正文里留一行审计痕迹 */
+  .note { font-size:11px; color:var(--text-dim); font-family:var(--mono); padding:1px 0; }
+
+  /* 审批窗口：钉在输入框上方，必须显式点一下才会执行 */
+  .approval { border:1px solid var(--warn-border); background:var(--warn-soft);
+    border-radius:var(--radius); padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+  .approval[hidden] { display:none; }
+  .approval-head { font-size:12.5px; font-weight:600; color:var(--warn); }
+  .approval-head .tool-name { font-family:var(--mono); }
+  .approval-reason { font-size:12px; white-space:pre-wrap; }
+  .approval-call { font-family:var(--mono); font-size:10.5px; color:var(--text-dim); }
+  .approval-call[hidden] { display:none; }
+  .approval-actions { display:flex; gap:8px; justify-content:flex-end; }
+  .approval .btn.allow { background:var(--accent-fill); border-color:var(--accent-fill); color:var(--on-accent); }
+  .approval .btn:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .approval-note { font-size:11px; color:var(--text-dim); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="dot" id="statusDot"></span>
+  <span class="project" id="projectName">…</span>
+  <span class="spacer"></span>
+  <span class="feed" id="feedLabel"></span>
+</header>
+
+<main class="thread" id="thread">
+  <div class="empty" id="empty">发消息开始对话</div>
+</main>
+
+<footer class="composer">
+  <!-- 审批窗口：工具执行前必须在这里明确点“允许一次” -->
+  <div class="approval" id="approval" hidden role="alertdialog" aria-live="assertive"
+       aria-labelledby="apprHead">
+    <div class="approval-head" id="apprHead">
+      <span class="tool-name" id="apprTool">tool</span> 请求执行权限
+    </div>
+    <div class="approval-reason" id="apprReason"></div>
+    <div class="approval-call" id="apprCall" hidden></div>
+    <div class="approval-actions">
+      <span class="approval-note" id="apprNote">Esc 拒绝 · 焦点在此卡片时 Enter 允许</span>
+      <button type="button" class="btn" id="apprReject">拒绝</button>
+      <button type="button" class="btn allow" id="apprAllow">允许一次</button>
+    </div>
+  </div>
+
+  <div class="mode-row">
+    <div class="seg" id="mode">
+      <button type="button" class="active" data-mode="act">Act</button>
+      <button type="button" data-mode="plan">Plan</button>
+    </div>
+    <span class="hint" id="modeHint">直接执行改动</span>
+  </div>
+  <textarea id="input" placeholder="描述要做什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+  <div class="actions">
+    <span class="spacer"></span>
+    <button class="btn" id="stop" disabled>停止</button>
+    <button class="btn primary" id="send">发送</button>
+  </div>
+</footer>
+
+<div class="statusbar">
+  <div class="picker" id="permPicker">
+    <button type="button" class="picker-btn" id="permBtn" title="会话权限：越界操作会在这里请求审批">权限</button>
+    <div class="picker-menu" id="permMenu"></div>
+  </div>
+  <div class="picker" id="modelPicker">
+    <button type="button" class="picker-btn" id="modelBtn">模型</button>
+    <div class="picker-menu" id="modelMenu"></div>
+  </div>
+  <div class="picker" id="effortPicker">
+    <button type="button" class="picker-btn" id="effortBtn">思考：中</button>
+    <div class="picker-menu" id="effortMenu">
+      <button type="button" data-value="low">思考：低</button>
+      <button type="button" data-value="medium" class="active">思考：中</button>
+      <button type="button" data-value="high">思考：高</button>
+      <button type="button" data-value="max">思考：MAX</button>
+    </div>
+  </div>
+  <span class="spacer"></span>
+  <span class="sid" id="sid"></span>
+</div>
+
+<script type="module">
+const params = new URLSearchParams(location.search)
+const cwd = params.get('cwd') ?? ''
+const projectName = cwd.split(/[\\/]/).filter(Boolean).pop() ?? '未指定项目'
+
+const el = (id) => document.getElementById(id)
+const thread = el('thread')
+const empty = el('empty')
+const input = el('input')
+const sendBtn = el('send')
+const stopBtn = el('stop')
+const statusDot = el('statusDot')
+const sidLabel = el('sid')
+const feedLabel = el('feedLabel')
+
+el('projectName').textContent = projectName
+
+/** Durable events of the session, in seq order. */
+let events = []
+let sessionId = null
+let lastSeq = -1
+let turnOpen = false
+let busy = false
+let planMode = false
+
+/** One live assistant attempt, folded from `agent/assistant-stream` frames. */
+let live = null
+/** Pending approval prompts; only the first is shown. */
+const approvals = []
+let deciding = false
+
+let streamAbort = null
+let streamGeneration = 0
+let pollTimer = null
+let polling = false
+
+function setStatus(kind) {
+  statusDot.className = 'dot' + (kind === 'ok' ? ' on' : kind === 'err' ? ' err' : '')
+}
+
+function setFeed(text) {
+  feedLabel.textContent = text
+}
+
+async function rpc(method, args) {
+  const res = await fetch('/api/' + method, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'client-request',
+      rpcId: 'ide-' + Math.random().toString(36).slice(2),
+      method,
+      payload: { args },
+    }),
+  })
+  if (!res.ok) throw new Error(method + ' HTTP ' + res.status)
+  const parsed = await res.json()
+  const result = parsed.result ?? parsed
+  if (result?.ok === false) {
+    const error = new Error(result.error?.message ?? 'failed')
+    error.code = result.error?.code
+    throw error
+  }
+  return result?.value ?? result
+}
+
+/** 会话分页要求一个已存在的 seq；越界错误里带着当前最大值。 */
+async function readPage(id) {
+  const address = { kind: 'session', sessionId: id }
+  try {
+    return await rpc('session/page', { request: { address, throughSeq: 1e9 } })
+  } catch (error) {
+    const cursor = Number(String(error.message).match(/cursor (\d+)/)?.[1])
+    if (!Number.isFinite(cursor)) throw error
+    return await rpc('session/page', { request: { address, throughSeq: cursor } })
+  }
+}
+
+function textOf(content) {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('')
+}
+
+/**
+ * 注入到 user/message 里的上下文（系统提示片段、运行时快照、技能清单）
+ * 不是用户说的话，界面上不该显示。
+ */
+function isInjected(text) {
+  const head = text.trimStart()
+  return head.startsWith('<system-reminder>')
+    || head.startsWith('<available_skills>')
+    || head.startsWith('Current runtime context')
+    || head.startsWith('Time sampled')
+}
+
+/** 只转义会破坏结构的字符；Markdown 规则随后再套。 */
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+/**
+ * 极简 Markdown：只覆盖模型实际会用的构造（代码块、表格、标题、列表、
+ * 链接、加粗、行内代码）。不引第三方库，避免离线环境下拉不到。
+ */
+function renderMarkdown(text) {
+  const blocks = []
+  const stash = (html) => {
+    blocks.push(html)
+    return '\u0000' + (blocks.length - 1) + '\u0000'
+  }
+
+  let html = escapeHtml(text)
+
+  // 围栏代码块
+  html = html.replace(/```([\w+-]*)\n([\s\S]*?)```/g, (_, _lang, code) =>
+    '\n' + stash('<pre class="md-code"><code>' + code.replace(/\n$/, '') + '</code></pre>') + '\n')
+
+  // 表格：连续以 | 开头的行
+  html = html.replace(/(?:^|\n)((?:\|[^\n]*\|[ \t]*(?:\n|$))+)/g, (match, table) => {
+    const lines = table.trim().split('\n').map((line) => line.trim()).filter(Boolean)
+    if (lines.length < 2) return match
+    const isSeparator = (line) => /^\|[\s:|-]+\|$/.test(line)
+    const rows = lines.filter((line) => !isSeparator(line)).map((line) =>
+      line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
+    if (rows.length === 0) return match
+    const head = rows[0]
+    const body = rows.slice(1)
+    let tableHtml = '<table class="md-table"><thead><tr>'
+    for (const cell of head) tableHtml += '<th>' + cell + '</th>'
+    tableHtml += '</tr></thead><tbody>'
+    for (const row of body) {
+      tableHtml += '<tr>'
+      for (const cell of row) tableHtml += '<td>' + cell + '</td>'
+      tableHtml += '</tr>'
+    }
+    tableHtml += '</tbody></table>'
+    return '\n' + stash(tableHtml) + '\n'
+  })
+
+  // 标题
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>')
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>')
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
+
+  // 水平线
+  html = html.replace(/^---+$/gm, '<hr/>')
+
+  // 无序列表（逐行，避免误伤正文）
+  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+
+  // 链接
+  html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+
+  // 加粗与行内代码
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
+
+  // 段落：保留空行结构
+  html = html
+    .split(/\n{2,}/)
+    .map((chunk) => {
+      const trimmed = chunk.trim()
+      if (trimmed.length === 0) return ''
+      if (/^\u0000\d+\u0000$/.test(trimmed)) return trimmed
+      if (/^<(h[1-6]|hr|table|pre|li)/.test(trimmed)) return trimmed
+      return '<p>' + trimmed.replace(/\n/g, '<br/>') + '</p>'
+    })
+    .join('')
+
+  return html.replace(/\u0000(\d+)\u0000/g, (_, index) => blocks[Number(index)] ?? '')
+}
+
+/** 把一条助手消息拆成「思考」和「正文」。 */
+function splitAssistant(content) {
+  if (!Array.isArray(content)) return { reasoning: '', text: '' }
+  let reasoning = ''
+  let text = ''
+  for (const part of content) {
+    if (!part || typeof part.text !== 'string') continue
+    if (part.type === 'reasoning') reasoning += part.text
+    else if (part.type === 'text') text += part.text
+  }
+  return { reasoning, text }
+}
+
+function hasOpenTurn(list) {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const type = list[index]?.type
+    if (type === 'turn/start') return true
+    if (type === 'turn/end') return false
+  }
+  return false
+}
+
+function nearBottom() {
+  return thread.scrollHeight - thread.scrollTop - thread.clientHeight < 60
+}
+
+/* ------------------------------------------------------------------ *
+ * 持久事件渲染
+ * ------------------------------------------------------------------ */
+
+let liveNode = null
+let liveRefs = null
+let liveFrame = 0
+
+function dropLiveNode() {
+  if (liveNode !== null) liveNode.remove()
+  liveNode = null
+  liveRefs = null
+}
+
+function ensureLiveNode() {
+  if (liveNode !== null) return liveNode
+  const node = document.createElement('div')
+  node.className = 'msg assistant live'
+
+  const details = document.createElement('details')
+  details.className = 'reasoning'
+  details.open = true
+  const summary = document.createElement('summary')
+  summary.textContent = '思考过程'
+  const reasoning = document.createElement('div')
+  reasoning.className = 'reasoning-body'
+  details.append(summary, reasoning)
+
+  const body = document.createElement('div')
+  body.className = 'md'
+
+  const tools = document.createElement('div')
+  tools.className = 'live-tools'
+
+  node.append(details, body, tools)
+  thread.appendChild(node)
+  liveNode = node
+  liveRefs = { details, reasoning, body, tools }
+  return node
+}
+
+function renderLive() {
+  const active = live
+  const hasReasoning = active !== null && active.reasoning.trim() !== ''
+  const hasText = active !== null && active.text.trim() !== ''
+  const hasTools = active !== null && active.tools.size > 0
+  const show = turnOpen || hasReasoning || hasText || hasTools
+  if (!show) {
+    dropLiveNode()
+    return
+  }
+
+  const stick = nearBottom()
+  const node = ensureLiveNode()
+
+  liveRefs.details.hidden = !hasReasoning
+  if (hasReasoning) liveRefs.reasoning.textContent = active.reasoning
+
+  if (hasText) {
+    liveRefs.body.innerHTML = renderMarkdown(active.text)
+    // 正在增长时给一个光标；settle 之后不再闪。
+    if (active !== null && !active.done) {
+      const cursor = document.createElement('span')
+      cursor.className = 'cursor'
+      liveRefs.body.appendChild(cursor)
+    }
+  } else if (turnOpen && !hasReasoning && !hasTools) {
+    liveRefs.body.innerHTML = '<span class="thinking">思考中</span>'
+  } else {
+    liveRefs.body.innerHTML = ''
+  }
+
+  liveRefs.tools.innerHTML = ''
+  if (active !== null) {
+    for (const tool of active.tools.values()) {
+      const line = document.createElement('div')
+      line.className = 'tool-line'
+      const label = document.createElement('span')
+      label.className = 'label'
+      label.textContent = tool.name || 'tool'
+      line.append(label)
+      if (tool.args) {
+        const args = document.createElement('span')
+        args.textContent = ' ' + (tool.args.length > 160 ? tool.args.slice(0, 160) + '…' : tool.args)
+        line.append(args)
+      }
+      liveRefs.tools.appendChild(line)
+    }
+  }
+
+  if (stick) thread.scrollTop = thread.scrollHeight
+}
+
+function scheduleLive() {
+  if (liveFrame !== 0) return
+  liveFrame = requestAnimationFrame(() => {
+    liveFrame = 0
+    renderLive()
+  })
+}
+
+function renderThread() {
+  const rows = []
+  // 审批结果只带 id，先把 asked 里的工具名收成一张表。
+  const approvalTools = new Map()
+  for (const event of events) {
+    if (event?.type === 'approval/asked' && typeof event.data?.id === 'string') {
+      approvalTools.set(event.data.id, event.data.toolName ?? 'tool')
+    }
+  }
+  // 连续的「只有思考的 assistant + 工具调用」折叠成一块，
+  // 否则每步都带 reasoning，屏幕上会被刷成几十个卡片。
+  let group = null
+  const ensureGroup = () => {
+    if (group === null) {
+      group = { kind: 'group', tools: [], reasoning: '' }
+      rows.push(group)
+    }
+    return group
+  }
+  const flushGroup = () => { group = null }
+
+  for (const event of events) {
+    if (!event) continue
+
+    if (event.type === 'user/message') {
+      const text = textOf(event.data?.content)
+      if (text && !isInjected(text)) {
+        flushGroup()
+        rows.push({ kind: 'user', text })
+      }
+      continue
+    }
+
+    if (event.type === 'assistant/message') {
+      const { reasoning, text } = splitAssistant(event.data?.message?.content)
+      if (text.trim()) {
+        // 有正文：这是真正的回答，单独成块。
+        flushGroup()
+        rows.push({ kind: 'assistant', text, reasoning })
+      } else if (reasoning.trim()) {
+        // 只有思考：并入当前工作块。
+        ensureGroup().reasoning += reasoning
+      }
+      continue
+    }
+
+    if (event.type === 'tool/call') {
+      ensureGroup().tools.push(event.data?.name ?? 'tool')
+      continue
+    }
+
+    if (event.type === 'approval/decided') {
+      const name = approvalTools.get(event.data?.id) ?? '工具'
+      const outcome = event.data?.outcome
+      const label = outcome === 'allowed-once' ? '已允许一次'
+        : outcome === 'rejected' ? '已拒绝'
+          : outcome === 'cancelled' ? '已取消'
+            : '未取得决定'
+      flushGroup()
+      rows.push({ kind: 'note', text: '🛡 ' + name + ' · ' + label })
+    }
+  }
+
+  const stick = nearBottom()
+  const previousTop = thread.scrollTop
+
+  dropLiveNode()
+  thread.innerHTML = ''
+  if (rows.length === 0) {
+    if (!turnOpen) thread.appendChild(empty)
+    renderLive()
+    return
+  }
+
+  for (const row of rows) {
+    if (row.kind === 'group') {
+      const details = document.createElement('details')
+      details.className = 'work-group'
+
+      const summary = document.createElement('summary')
+      const counts = new Map()
+      for (const name of row.tools) counts.set(name, (counts.get(name) ?? 0) + 1)
+      const labels = [...counts].map(([name, count]) => count > 1 ? name + ' ×' + count : name)
+      summary.textContent = '🔧 ' + row.tools.length + ' 个操作' + (labels.length ? ' · ' + labels.join(' · ') : '')
+      details.appendChild(summary)
+
+      if (row.reasoning.trim()) {
+        const reasoning = document.createElement('div')
+        reasoning.className = 'reasoning-body'
+        reasoning.textContent = row.reasoning
+        details.appendChild(reasoning)
+      }
+
+      if (row.tools.length > 0) {
+        const list = document.createElement('div')
+        list.className = 'tool-list'
+        list.textContent = row.tools.join(' → ')
+        details.appendChild(list)
+      }
+
+      thread.appendChild(details)
+      continue
+    }
+
+    const node = document.createElement('div')
+    node.className = 'msg ' + row.kind
+
+    if (row.kind === 'assistant' && row.reasoning && row.reasoning.trim()) {
+      const details = document.createElement('details')
+      details.className = 'reasoning'
+      const summary = document.createElement('summary')
+      summary.textContent = '思考过程'
+      const body = document.createElement('div')
+      body.className = 'reasoning-body'
+      body.textContent = row.reasoning
+      details.append(summary, body)
+      node.appendChild(details)
+    }
+
+    if (row.kind === 'assistant') {
+      const body = document.createElement('div')
+      body.className = 'md'
+      body.innerHTML = renderMarkdown(row.text)
+      node.appendChild(body)
+    } else {
+      node.textContent = row.text
+    }
+
+    thread.appendChild(node)
+  }
+
+  renderLive()
+  thread.scrollTop = stick ? thread.scrollHeight : previousTop
+}
+
+/* ------------------------------------------------------------------ *
+ * 流式帧
+ * ------------------------------------------------------------------ */
+
+function newAttempt(attemptId) {
+  return { attemptId, text: '', reasoning: '', tools: new Map(), done: false }
+}
+
+function onFrame(frame) {
+  if (!frame || typeof frame !== 'object') return
+  if (frame.type === 'start') {
+    if (live === null || live.attemptId !== frame.attemptId) live = newAttempt(frame.attemptId)
+    scheduleLive()
+    return
+  }
+  if (frame.type === 'end') {
+    if (live !== null && live.attemptId === frame.attemptId) live.done = true
+    scheduleLive()
+    return
+  }
+  if (frame.type !== 'chunk' || live === null) {
+    if (frame.type === 'chunk' && live === null) live = newAttempt(frame.attemptId)
+    else return
+  }
+
+  const chunk = frame.chunk
+  if (!chunk || typeof chunk !== 'object') return
+  if (chunk.type === 'text-delta') {
+    live.text += chunk.text ?? ''
+  } else if (chunk.type === 'reasoning-delta') {
+    live.reasoning += chunk.text ?? ''
+  } else if (chunk.type === 'tool-call-delta') {
+    const key = typeof chunk.index === 'number' ? chunk.index : 0
+    const tool = live.tools.get(key) ?? { name: '', args: '' }
+    if (typeof chunk.name === 'string' && chunk.name !== '') tool.name = chunk.name
+    tool.args += chunk.argumentsDelta ?? ''
+    live.tools.set(key, tool)
+  }
+  scheduleLive()
+}
+
+/* ------------------------------------------------------------------ *
+ * 持久事件摄入
+ * ------------------------------------------------------------------ */
+
+function ingest(event) {
+  if (!event || typeof event.seq !== 'number') return
+  if (event.seq <= lastSeq) return
+  events.push(event)
+  lastSeq = event.seq
+
+  if (event.type === 'turn/start') turnOpen = true
+  if (event.type === 'turn/end') {
+    turnOpen = false
+    live = null
+  }
+  // 最终消息已经落盘，流式块完成使命；否则会和新气泡重复显示。
+  if (event.type === 'assistant/message') live = null
+
+  stopBtn.disabled = !turnOpen
+  renderThread()
+}
+
+/* ------------------------------------------------------------------ *
+ * 审批窗口
+ * ------------------------------------------------------------------ */
+
+function renderApproval() {
+  const card = el('approval')
+  const item = approvals[0]
+  if (!item) {
+    card.hidden = true
+    return
+  }
+  card.hidden = false
+  el('apprTool').textContent = item.toolName ?? 'tool'
+  el('apprReason').textContent = item.reason ?? item.displayReason ?? '该操作需要你确认后才能继续。'
+  const call = el('apprCall')
+  call.hidden = typeof item.callId !== 'string' || item.callId === ''
+  call.textContent = item.callId ? '调用 ' + item.callId : ''
+  el('apprNote').textContent = approvals.length > 1
+    ? '还有 ' + (approvals.length - 1) + ' 个待审批 · Esc 拒绝'
+    : 'Esc 拒绝 · 焦点在卡片上时 Enter 允许'
+  if (document.activeElement !== el('apprAllow') && document.activeElement !== el('apprReject')) {
+    el('apprAllow').focus({ preventScroll: true })
+  }
+}
+
+function pushApproval(payload) {
+  if (!payload || typeof payload.id !== 'string') return
+  if (approvals.some((item) => item.id === payload.id)) return
+  approvals.push(payload)
+  renderApproval()
+}
+
+function removeApproval(id) {
+  const index = approvals.findIndex((item) => item.id === id)
+  if (index >= 0) approvals.splice(index, 1)
+  renderApproval()
+}
+
+async function decideApproval(decision) {
+  const item = approvals[0]
+  if (!item || deciding) return
+  deciding = true
+  el('apprAllow').disabled = true
+  el('apprReject').disabled = true
+  try {
+    const res = await fetch('/api/ide/approval', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId: item.id, decision }),
+    })
+    // 404 表示服务端已经结算（超时/取消），同样把卡片收掉。
+    if (!res.ok && res.status !== 404) {
+      console.warn('approval answer failed', res.status)
+    }
+  } catch (error) {
+    console.warn('approval answer failed', error)
+  } finally {
+    deciding = false
+    el('apprAllow').disabled = false
+    el('apprReject').disabled = false
+    removeApproval(item.id)
+  }
+}
+
+el('apprAllow').addEventListener('click', () => decideApproval('allow'))
+el('apprReject').addEventListener('click', () => decideApproval('reject'))
+
+document.addEventListener('keydown', (event) => {
+  if (approvals.length === 0) return
+  const card = el('approval')
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    decideApproval('reject')
+    return
+  }
+  // 只让焦点在卡片内时 Enter 生效，避免在输入框敲回车误批准。
+  if (event.key === 'Enter' && !event.shiftKey && card.contains(document.activeElement)) {
+    event.preventDefault()
+    decideApproval('allow')
+  }
+})
+
+/* ------------------------------------------------------------------ *
+ * SSE 流：主通道；失败时退回轮询
+ * ------------------------------------------------------------------ */
+
+function dispatchSse(block) {
+  let name = 'message'
+  const data = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith(':')) continue
+    if (line.startsWith('event:')) name = line.slice(6).trim()
+    else if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+  }
+  if (data.length === 0) return
+  let payload
+  try {
+    payload = JSON.parse(data.join('\n'))
+  } catch {
+    return
+  }
+  handleStreamMessage(name, payload)
+}
+
+function handleStreamMessage(name, payload) {
+  if (name === 'snapshot') {
+    const incoming = Array.isArray(payload?.events) ? payload.events : []
+    events = incoming.slice()
+    lastSeq = events.reduce((max, event) => Math.max(max, typeof event?.seq === 'number' ? event.seq : -1), -1)
+    turnOpen = hasOpenTurn(events)
+    live = null
+    stopBtn.disabled = !turnOpen
+    stopPolling()
+    setStatus('ok')
+    setFeed('流式')
+    renderThread()
+    return
+  }
+  if (name === 'event') {
+    ingest(payload)
+    return
+  }
+  if (name === 'assistant') {
+    onFrame(payload)
+    return
+  }
+  if (name === 'approval') {
+    pushApproval(payload)
+    return
+  }
+  if (name === 'approval-resolved') {
+    removeApproval(payload?.id)
+  }
+}
+
+async function connectStream() {
+  if (!sessionId) return
+  const generation = ++streamGeneration
+  if (streamAbort !== null) streamAbort.abort()
+  const controller = new AbortController()
+  streamAbort = controller
+
+  const url = '/api/ide/stream?sessionId=' + encodeURIComponent(sessionId)
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' })
+    if (!response.ok || response.body === null) throw new Error('stream HTTP ' + response.status)
+    setFeed('流式')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (generation !== streamGeneration) return
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        if (block.trim() !== '') dispatchSse(block)
+        boundary = buffer.indexOf('\n\n')
+      }
+    }
+    throw new Error('stream ended')
+  } catch (error) {
+    if (controller.signal.aborted || generation !== streamGeneration) return
+    console.warn('stream unavailable', error)
+    setStatus('err')
+    setFeed('轮询')
+    startPolling()
+    setTimeout(() => {
+      if (generation === streamGeneration) connectStream()
+    }, 3000)
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 轮询：旧服务端 / 流断开时的兜底
+ * ------------------------------------------------------------------ */
+
+function startPolling() {
+  if (pollTimer !== null) return
+  pollTimer = setInterval(() => { poll() }, 1200)
+}
+
+function stopPolling() {
+  if (pollTimer === null) return
+  clearInterval(pollTimer)
+  pollTimer = null
+}
+
+async function poll() {
+  if (polling || !sessionId) return
+  polling = true
+  try {
+    const page = await readPage(sessionId)
+    const records = Array.isArray(page?.records) ? page.records : []
+    let changed = false
+    for (const record of records) {
+      const event = record?.event ?? record
+      if (!event || typeof event.seq !== 'number') continue
+      if (event.seq <= lastSeq) continue
+      events.push(event)
+      lastSeq = event.seq
+      if (event.type === 'turn/start') turnOpen = true
+      if (event.type === 'turn/end') { turnOpen = false; live = null }
+      if (event.type === 'assistant/message') live = null
+      changed = true
+    }
+    stopBtn.disabled = !turnOpen
+    if (changed) renderThread()
+    if (pollTimer !== null) setStatus('ok')
+  } catch (error) {
+    console.error('poll failed', error)
+    setStatus('err')
+  } finally {
+    polling = false
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 会话 / 发送
+ * ------------------------------------------------------------------ */
+
+function sessionKey() {
+  return 'dsh-ide-session:' + cwd
+}
+
+async function ensureSession() {
+  const saved = localStorage.getItem(sessionKey())
+  if (saved) {
+    sessionId = saved
+  } else {
+    // 用 workspaceId 建会话，会话才会归到项目分组下；只传 cwd 会落到「未分组」。
+    let workspaceId = null
+    try {
+      const info = await fetch('/api/ide/context?cwd=' + encodeURIComponent(cwd)).then((r) => r.json())
+      workspaceId = info?.workspaceId ?? null
+    } catch (error) {
+      console.warn('workspace resolve failed', error)
+    }
+    const created = await rpc('session/create', {
+      request: workspaceId ? { workspaceId } : { cwd },
+    })
+    sessionId = created.sessionId
+    localStorage.setItem(sessionKey(), sessionId)
+  }
+  sidLabel.textContent = sessionId.slice(-8)
+}
+
+/** 首屏：先拿一次分页快照，旧服务端也能立即显示历史；随后升级到 SSE。 */
+async function loadInitial() {
+  setStatus('ok')
+  const page = await readPage(sessionId)
+  const records = Array.isArray(page?.records) ? page.records : []
+  events = records.map((record) => record?.event ?? record).filter(Boolean)
+  lastSeq = events.reduce((max, event) => Math.max(max, typeof event?.seq === 'number' ? event.seq : -1), -1)
+  turnOpen = hasOpenTurn(events)
+  stopBtn.disabled = !turnOpen
+  renderThread()
+  connectStream()
+  loadModels().catch((error) => console.warn('model catalog failed', error))
+  loadPermission()
+}
+
+async function send() {
+  const text = input.value.trim()
+  if (!text || busy) return
+  busy = true
+  sendBtn.disabled = true
+  try {
+    // Plan 模式没有服务端开关：DSH 的 /plan 是客户端命令，API 不接受。
+    // 这里用一条明确的指令约束模型只出方案，服务端另有 tools.guard 硬拦。
+    const PLAN_PREFIX = '[只读模式] 本轮只允许读取和分析，不要修改文件或执行写操作。' + String.fromCharCode(10, 10)
+    const text2 = planMode ? PLAN_PREFIX + text : text
+    await rpc('session/prompt', {
+      request: {
+        requestId: 'req-' + crypto.randomUUID(),
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: text2 }],
+      },
+    })
+    input.value = ''
+    if (pollTimer !== null) await poll()
+  } catch (error) {
+    console.error('send failed', error)
+    setStatus('err')
+  } finally {
+    busy = false
+    sendBtn.disabled = false
+  }
+}
+
+let catalog = null
+let currentProvider = 'deepseek-account'
+let currentModel = 'deepseek-flash'
+let currentEffort = 'max'
+
+function findModel(provider, model) {
+  for (const group of catalog?.groups ?? []) {
+    if (group.id !== provider) continue
+    for (const item of group.models ?? []) {
+      if (item.id === model) return item
+    }
+  }
+  return null
+}
+
+function renderEfforts(model) {
+  const menu = el('effortMenu')
+  menu.innerHTML = ''
+  const efforts = model?.reasoning?.efforts ?? []
+  if (efforts.length === 0) {
+    const none = document.createElement('div')
+    none.className = 'picker-empty'
+    none.textContent = '该模型不支持调整'
+    menu.appendChild(none)
+    el('effortBtn').textContent = '思考：不支持'
+    return
+  }
+  for (const effort of efforts) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.dataset.value = effort.id
+    btn.textContent = effort.name
+    if (effort.id === currentEffort) btn.classList.add('active')
+    menu.appendChild(btn)
+  }
+  const active = efforts.find((e) => e.id === currentEffort) ?? efforts[0]
+  currentEffort = active.id
+  el('effortBtn').textContent = '思考：' + active.name
+}
+
+async function loadModels() {
+  catalog = await rpc('session/modelCatalog', {})
+  const menu = el('modelMenu')
+  menu.innerHTML = ''
+  for (const group of catalog?.groups ?? []) {
+    for (const model of group.models ?? []) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.dataset.value = group.id + '|' + model.id
+      btn.dataset.provider = group.id
+      btn.dataset.model = model.id
+      btn.textContent = model.name
+      menu.appendChild(btn)
+    }
+  }
+  const def = catalog?.default ?? { provider: currentProvider, model: currentModel }
+  currentProvider = def.provider ?? currentProvider
+  currentModel = def.model ?? currentModel
+  currentEffort = def.reasoningEffort ?? currentEffort
+  const current = findModel(currentProvider, currentModel)
+  el('modelBtn').textContent = current?.name ?? currentModel
+  renderEfforts(current)
+  await pushSelection()
+}
+
+/** 会话权限：决定工具要不要先请求审批。 */
+async function loadPermission() {
+  if (!sessionId) return
+  try {
+    const response = await fetch('/api/ide/permission?sessionId=' + encodeURIComponent(sessionId), { cache: 'no-store' })
+    if (!response.ok) throw new Error('HTTP ' + response.status)
+    const info = await response.json()
+    const menu = el('permMenu')
+    menu.innerHTML = ''
+    for (const option of info.options ?? []) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.dataset.value = option.value
+      btn.textContent = option.name ?? option.value
+      if (option.description) btn.title = option.description
+      if (option.value === info.current) btn.classList.add('active')
+      menu.appendChild(btn)
+    }
+    const current = (info.options ?? []).find((option) => option.value === info.current)
+    el('permBtn').textContent = '权限：' + (current?.name ?? info.current ?? '未知')
+  } catch (error) {
+    console.warn('permission catalog failed', error)
+  }
+}
+
+async function pushSelection() {
+  if (!sessionId) return
+  try {
+    await rpc('session/selectModel', {
+      request: {
+        sessionId,
+        provider: currentProvider,
+        model: currentModel,
+        reasoningEffort: currentEffort,
+      },
+    })
+  } catch (error) {
+    console.warn('selectModel failed', error.message)
+  }
+}
+
+async function setPlanMode(enabled) {
+  planMode = enabled
+  el('modeHint').textContent = enabled ? '只读：写操作会被拒绝' : '直接执行改动'
+  try {
+    await fetch('/api/ide/plan-mode', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, enabled }),
+    })
+  } catch (error) {
+    console.warn('plan mode toggle failed', error)
+  }
+}
+
+el('mode').addEventListener('click', (event) => {
+  const button = event.target.closest('button')
+  if (!button) return
+  for (const item of el('mode').querySelectorAll('button')) item.classList.remove('active')
+  button.classList.add('active')
+  setPlanMode(button.dataset.mode === 'plan')
+})
+
+stopBtn.addEventListener('click', async () => {
+  if (!sessionId) return
+  try {
+    await rpc('session/cancel', { request: { sessionId } })
+    stopBtn.disabled = true
+  } catch (error) {
+    console.warn('cancel failed', error)
+  }
+})
+
+sendBtn.addEventListener('click', send)
+input.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    send()
+  }
+})
+
+// 跟随 IDE 主题：插件会在页面加载后注入真实配色；这里只给
+// 浏览器预览一个基于系统偏好的初值，且不覆盖已经恢复的缓存主题。
+if (!document.documentElement.dataset.theme && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+  document.documentElement.dataset.theme = 'dark'
+}
+
+// —— 底栏选择器（向上弹出，避免被窗口底部裁掉）——
+const pickerRoots = []
+function setupPicker(rootId, buttonId, menuId, onPick) {
+  const root = el(rootId)
+  const btn = el(buttonId)
+  const menu = el(menuId)
+  pickerRoots.push(root)
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation()
+    const wasOpen = root.classList.contains('open')
+    for (const other of pickerRoots) other.classList.remove('open')
+    if (!wasOpen) root.classList.add('open')
+  })
+  menu.addEventListener('click', (event) => {
+    const item = event.target.closest('button[data-value]')
+    if (!item) return
+    for (const other of menu.querySelectorAll('button')) other.classList.remove('active')
+    item.classList.add('active')
+    btn.textContent = item.textContent
+    root.classList.remove('open')
+    if (onPick) onPick(item.dataset.value, item.textContent)
+  })
+}
+document.addEventListener('click', () => {
+  for (const root of pickerRoots) root.classList.remove('open')
+})
+setupPicker('modelPicker', 'modelBtn', 'modelMenu', async () => {
+  const menu = el('modelMenu')
+  const active = menu.querySelector('button.active')
+  if (active) {
+    currentProvider = active.dataset.provider
+    currentModel = active.dataset.model
+    renderEfforts(findModel(currentProvider, currentModel))
+    await pushSelection()
+  }
+})
+setupPicker('effortPicker', 'effortBtn', 'effortMenu', async (value) => {
+  currentEffort = value
+  await pushSelection()
+})
+setupPicker('permPicker', 'permBtn', 'permMenu', async (value) => {
+  try {
+    const response = await fetch('/api/ide/permission', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, preset: value }),
+    })
+    const info = await response.json()
+    if (!response.ok) throw new Error(info?.error ?? 'HTTP ' + response.status)
+    if (info.current !== value) el('permBtn').textContent = '权限：' + (info.name ?? value)
+  } catch (error) {
+    console.warn('permission switch failed', error)
+  }
+  await loadPermission()
+})
+
+const boot = async () => {
+  // 允许页面自带 token：先换 cookie，后续同源请求就能通过鉴权。
+  const bootToken = params.get('token')
+  if (bootToken) {
+    try {
+      await fetch('/?token=' + encodeURIComponent(bootToken), { redirect: 'manual' })
+    } catch (error) {
+      console.warn('token bootstrap failed', error)
+    }
+  }
+  if (!cwd) {
+    el('projectName').textContent = '缺少 cwd 参数'
+    setStatus('err')
+    return
+  }
+  try {
+    await ensureSession()
+    await loadInitial()
+  } catch (error) {
+    // 保存的会话可能已被清理（换机器、清历史）：丢掉旧 id，用新会话再试一次。
+    if (sessionId !== null && localStorage.getItem(sessionKey()) !== null) {
+      localStorage.removeItem(sessionKey())
+      sessionId = null
+      events = []
+      lastSeq = -1
+      turnOpen = false
+      try {
+        await ensureSession()
+        await loadInitial()
+        return
+      } catch (retryError) {
+        error = retryError
+      }
+    }
+    console.error('boot failed', error)
+    setStatus('err')
+    el('projectName').textContent = '连接失败'
+    thread.innerHTML = ''
+    const box = document.createElement('div')
+    box.className = 'empty'
+    box.style.whiteSpace = 'pre-wrap'
+    box.textContent = '连接失败：' + (error && error.stack ? error.stack : String(error))
+    thread.appendChild(box)
+  }
+}
+window.addEventListener('beforeunload', () => {
+  if (streamAbort !== null) streamAbort.abort()
+})
+boot()
+</script>
+</body>
+</html>

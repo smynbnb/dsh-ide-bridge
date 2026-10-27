@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DeepSeek Harness Bridge: points the IDE tool window at the running desktop
+     instance by reading %LOCALAPPDATA%\dsh-ide-bridge\bridge.json.
+     Derived from github.com/Chocomintopia/dsh-jetbrains-plugin (MIT). -->
+<idea-plugin>
+  <id>dsh.web.bridge</id>
+  <name>DeepSeek Harness Bridge</name>
+  <version>1.0.3</version>
+  <vendor url="https://github.com/Chocomintopia/dsh-jetbrains-plugin">dsh-ide-bridge fork</vendor>
+  <description><![CDATA[
+    <p>Docks the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>
+    Web UI into a JetBrains IDE tool window and attaches it to the
+    <b>already running desktop build</b>, so the IDE and the desktop window share
+    one backend: same sessions, same workspaces, same credentials.</p>
+
+    <h3>How it works</h3>
+    <p>The desktop shell keeps its browser launch token in memory, so no second
+    process can guess the URL. A small DSH side plugin writes the authenticated
+    URL to <code>%LOCALAPPDATA%\dsh-ide-bridge\bridge.json</code>; this plugin
+    reads that file, verifies the recorded process is alive, probes the endpoint,
+    and loads it. When the desktop build restarts, the token rotates and the
+    panel reconnects automatically.</p>
+
+    <h3>Requirements</h3>
+    <ul>
+      <li>IntelliJ Platform 2026.2+ with JCEF</li>
+      <li>The DeepSeek Harness desktop build running (it is not launched from the IDE)</li>
+      <li>The DSH side bridge plugin installed in that build's profile</li>
+    </ul>
+
+    <h3>Fallback</h3>
+    <p>Before the DSH side plugin is installed, set
+    <code>-Ddsh.web.url=&lt;url printed by dsh web&gt;</code> in
+    Help | Edit Custom VM Options to connect manually.</p>
+
+    <p>Forked from
+    <a href="https://github.com/Chocomintopia/dsh-jetbrains-plugin">github.com/Chocomintopia/dsh-jetbrains-plugin</a>
+    (MIT).</p>
+  ]]></description>
+  <change-notes><![CDATA[
+    <h3>1.0.3</h3>
+    <ul>
+      <li>Filled buttons (send, Act/Plan, approval) now use the theme's default-button colors and label instead of the link color, so high-contrast themes no longer paint black-on-fluorescent-green controls.</li>
+    </ul>
+    <h3>1.0.2</h3>
+    <ul>
+      <li>The IDE panel now follows the actual IDE theme — Islands, Darcula, IntelliJ Light, High Contrast and custom themes — by sampling the live look-and-feel colors instead of guessing light/dark.</li>
+      <li>Theme and editor color scheme changes apply to an open panel immediately.</li>
+      <li>The panel uses the IDE UI font and editor font family, and gets a stronger focus ring under high-contrast themes.</li>
+    </ul>
+    <h3>1.0.1</h3>
+    <ul>
+      <li>After the desktop build restarts and the token rotates, the tool window returns to the compact IDE panel instead of the full Web UI.</li>
+      <li>The compact panel now streams output live and shows permission prompts from the DSH side plugin.</li>
+    </ul>
+    <h3>1.0.0</h3>
+    <ul>
+      <li>Attaches to the running desktop instance via a hand-off file instead of a static URL.</li>
+      <li>Detects a dead desktop process, a rotated token, and an unreachable port.</li>
+      <li>Reconnects automatically when the desktop build restarts.</li>
+      <li>Keeps the pinned DeepSeek Chat tab and the no-restart reload action.</li>
+    </ul>
+  ]]></change-notes>
+  <idea-version since-build="262" />
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.jcef</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <!-- Icon: official-whale-gray.svg (light theme) +
+         official-whale-gray_dark.svg (dark theme, JetBrains _dark convention). -->
+    <toolWindow id="DeepSeek Harness Bridge" anchor="right" icon="/icons/official-whale-gray.svg" factoryClass="dsh.web.plugin.DshWebToolWindowFactory" />
+    <!-- Publishes the open project's path so the harness side can scope MCP calls
+         without a hard-coded IJ_MCP_SERVER_PROJECT_PATH. -->
+    <postStartupActivity implementation="dsh.web.plugin.ProjectBridge$Startup" />
+  </extensions>
+  <actions>
+    <!-- Reload the Web UI without restarting the IDE (cache bypassed). -->
+    <!-- No keyboard shortcut is bound here on purpose: it could clash with
+         other keybindings. Users can assign one in Settings | Keymap. -->
+    <action id="dsh.web.bridge.reload" class="dsh.web.plugin.ReloadPageAction"
+            text="Reload DeepSeek Harness Page"
+            description="Reload the active DeepSeek Harness tab, bypassing the cache" />
+
+    <!-- Sends the editor selection into the DSH composer as a file reference. -->
+    <action id="dsh.web.bridge.sendSelection" class="dsh.web.plugin.SendSelectionAction"
+            text="发送选中代码到 DSH"
+            description="把当前选中的代码作为文件引用插入 DeepSeek Harness 输入框">
+      <add-to-group group-id="EditorPopupMenu" anchor="first" />
+    </action>
+  </actions>
+</idea-plugin>

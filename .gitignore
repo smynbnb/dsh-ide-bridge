@@ -1,0 +1,21 @@
+# Build outputs
+plugin/out/
+plugin/classes/
+plugin/staging/
+plugin/compile.args
+plugin/*.class
+plugin/releases/
+
+# Local caches and logs
+.cache/
+node_modules/
+tools/java-classes/
+*.log
+
+# Upstream Marketplace documentation; this fork is documented in the root README
+plugin/README.md
+plugin/README.en.md
+plugin/docs/
+
+# Local-only inspection helper (not part of the published project)
+tools/asar-extract.mjs

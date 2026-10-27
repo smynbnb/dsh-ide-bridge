@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH 侧栏原型</title>
+<style>
+  :root {
+    --radius: 8px;
+    --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    /* 浅色（默认）*/
+    --bg: #ffffff;
+    --bg-soft: #f7f7f8;
+    --bg-raised: #ffffff;
+    --border: #e3e3e6;
+    --text: #1f2328;
+    --text-dim: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eef2ff;
+    --tool-bg: #f4f4f5;
+    --user-bg: #eef2ff;
+  }
+  /* 深色：IDEA 用 Darcula 时由插件设置 data-theme="dark" */
+  :root[data-theme="dark"] {
+    --bg: #1e1f22;
+    --bg-soft: #26282c;
+    --bg-raised: #2b2d31;
+    --border: #393b40;
+    --text: #dfe1e5;
+    --text-dim: #8b8f96;
+    --accent: #6ea8fe;
+    --accent-soft: #2a3350;
+    --tool-bg: #2b2d31;
+    --user-bg: #2a3350;
+  }
+  /* 没有 data-theme 时跟随系统：只在浏览器预览里出现 */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --bg: #1e1f22;
+      --bg-soft: #26282c;
+      --bg-raised: #2b2d31;
+      --border: #393b40;
+      --text: #dfe1e5;
+      --text-dim: #8b8f96;
+      --accent: #6ea8fe;
+      --accent-soft: #2a3350;
+      --tool-bg: #2b2d31;
+      --user-bg: #2a3350;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.55 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* ---------- 顶部：项目名（只读） ---------- */
+  .topbar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-soft);
+    font-size: 12px; color: var(--text-dim);
+  }
+  .topbar .dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; flex: 0 0 auto; }
+  .topbar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .spacer { flex: 1; }
+  /* 原型专用：真实集成时由 IDEA 插件控制 data-theme，这个按钮会去掉 */
+  .theme-toggle {
+    border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+    border-radius: 4px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .theme-toggle:hover { color: var(--text); background: var(--bg-raised); }
+
+  /* ---------- 中间：对话流 ---------- */
+  .thread {
+    flex: 1 1 auto; overflow-y: auto;
+    padding: 12px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .msg { max-width: 100%; }
+  .msg.user {
+    align-self: flex-end;
+    background: var(--user-bg);
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    white-space: pre-wrap;
+  }
+  .msg.assistant .text { white-space: pre-wrap; }
+  .msg.assistant .text code {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--tool-bg); padding: 1px 4px; border-radius: 4px;
+  }
+  .msg.assistant .text pre {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--tool-bg); padding: 8px 10px; border-radius: var(--radius);
+    overflow-x: auto; margin: 8px 0;
+  }
+
+  /* 工具调用：一行摘要，点开看详情 */
+  .tool {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--tool-bg);
+    overflow: hidden;
+  }
+  .tool > summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .tool > summary::-webkit-details-marker { display: none; }
+  .tool .icon { flex: 0 0 auto; }
+  .tool .label { font-family: var(--mono); color: var(--accent); }
+  .tool .arg { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool .body {
+    border-top: 1px solid var(--border);
+    padding: 8px 10px;
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-dim);
+    white-space: pre-wrap; overflow-x: auto;
+  }
+
+  /* 思考中占位 */
+  .thinking { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12px; }
+  .thinking .pulse {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
+
+  /* ---------- 底部：输入区 ---------- */
+  .composer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border);
+    background: var(--bg-soft);
+    padding: 8px 10px 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .mode-row { display: flex; align-items: center; gap: 8px; }
+  .seg {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  }
+  .seg button {
+    border: 0; background: transparent; color: var(--text-dim);
+    font: inherit; font-size: 12px; padding: 3px 12px; cursor: pointer;
+  }
+  .seg button.active { background: var(--accent); color: #fff; }
+  .seg button:not(.active):hover { background: var(--bg-raised); color: var(--text); }
+  .hint { font-size: 11px; color: var(--text-dim); }
+
+  textarea {
+    width: 100%; resize: none;
+    min-height: 60px; max-height: 160px;
+    padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-raised); color: var(--text);
+    font: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+  .actions { display: flex; align-items: center; gap: 8px; }
+  .actions .spacer { flex: 1; }
+  .btn {
+    border: 1px solid var(--border); background: var(--bg-raised); color: var(--text);
+    border-radius: 6px; padding: 5px 14px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  /* ---------- 底栏：模型 / 思考强度 ---------- */
+  .statusbar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 11.5px; color: var(--text-dim);
+  }
+  .statusbar select {
+    border: 1px solid transparent; background: transparent; color: var(--text-dim);
+    font: inherit; font-size: 11.5px; padding: 2px 4px; border-radius: 4px; cursor: pointer;
+  }
+  .statusbar select:hover { border-color: var(--border); background: var(--bg-raised); color: var(--text); }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .id { font-family: var(--mono); font-size: 10.5px; opacity: .6; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="dot"></span>
+  <span class="name">zombies_control_test-1.21.1-NeoForge</span>
+  <span class="spacer"></span>
+  <!-- 原型专用：真实集成时由 IDEA 插件设置 data-theme，这个按钮会去掉 -->
+  <button type="button" class="theme-toggle" id="themeToggle" title="切换主题（预览用）">自动</button>
+</header>
+
+<main class="thread" id="thread">
+  <div class="msg user">看一下 EngineeringPathExecutor 里 finalizeWork 那段，团队协调的判断是不是有漏洞？</div>
+
+  <div class="msg assistant">
+    <div class="text">我读一下这个文件的相关部分。</div>
+    <details class="tool">
+      <summary>
+        <span class="icon">🔧</span>
+        <span class="label">read_file</span>
+        <span class="arg">src/main/java/.../EngineeringPathExecutor.java</span>
+      </summary>
+      <div class="body">L1606: private boolean finalizeWork(PathfinderMob mob, BlockWork work) {
+L1607:     Level level = mob.level();
+L1609:     // 【团队协调】目标已被己方炸弹预留…
+L1613:     if ((work.getType() == WorkType.DIG || work.getType() == WorkType.BLAST)
+L1614:             && BlastReservation.isReserved(level.dimension(), work.getPos())) {
+L1615:         TntLog.event(level, mob.getId(), "WORK_SKIP_RESERVED", ...);
+L1618:         return true;
+L1619:     }</div>
+    </details>
+    <div class="text">这段只拦住了 <code>DIG</code> 和 <code>BLAST</code>。如果之后新增了别的破坏方块的 WorkType，这里会漏掉。<br><br>建议改成白名单判断，或者把“会破坏方块”抽成 WorkType 上的一个方法。</div>
+  </div>
+
+  <div class="thinking"><span class="pulse"></span><span>正在思考…</span></div>
+</main>
+
+<footer class="composer">
+  <div class="mode-row">
+    <div class="seg" id="mode">
+      <button type="button" class="active" data-mode="act">Act</button>
+      <button type="button" data-mode="plan">Plan</button>
+    </div>
+    <span class="hint" id="modeHint">直接执行改动</span>
+  </div>
+
+  <textarea id="input" placeholder="描述要做什么，或 @ 引用文件…"></textarea>
+
+  <div class="actions">
+    <span class="spacer"></span>
+    <button class="btn" id="stop" disabled>停止</button>
+    <button class="btn primary" id="send">发送</button>
+  </div>
+</footer>
+
+<div class="statusbar">
+  <select>
+    <option>deepseek-flash</option>
+    <option>deepseek-v4-pro</option>
+  </select>
+  <select>
+    <option>思考：低</option>
+    <option selected>思考：中</option>
+    <option>思考：高</option>
+    <option>思考：MAX</option>
+  </select>
+  <span class="spacer"></span>
+  <span class="id">session 4ef33994</span>
+</div>
+
+<script>
+  // 原型专用：真实集成时插件按 IDEA 主题设置 data-theme，并监听主题切换。
+  const toggle = document.getElementById('themeToggle');
+  const themes = ['auto', 'dark', 'light'];
+  const themeLabels = { auto: '自动', dark: '深色', light: '浅色' };
+  let themeIndex = 0;
+  toggle.addEventListener('click', () => {
+    themeIndex = (themeIndex + 1) % themes.length;
+    const theme = themes[themeIndex];
+    if (theme === 'auto') {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+    toggle.textContent = themeLabels[theme];
+  });
+
+  const mode = document.getElementById('mode');
+  const hint = document.getElementById('modeHint');
+  const hints = { act: '直接执行改动', plan: '只出方案，不改文件' };
+  mode.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    for (const item of mode.querySelectorAll('button')) item.classList.remove('active');
+    button.classList.add('active');
+    hint.textContent = hints[button.dataset.mode] ?? '';
+  });
+
+  document.getElementById('send').addEventListener('click', () => {
+    const input = document.getElementById('input');
+    if (!input.value.trim()) return;
+    const thread = document.getElementById('thread');
+    const bubble = document.createElement('div');
+    bubble.className = 'msg user';
+    bubble.textContent = input.value;
+    thread.appendChild(bubble);
+    input.value = '';
+    thread.scrollTop = thread.scrollHeight;
+  });
+</script>
+</body>
+</html>
