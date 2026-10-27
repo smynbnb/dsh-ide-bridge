@@ -264,7 +264,12 @@ const fetchMock = async (url, options = {}) => {
     approvals.push(JSON.parse(options.body))
     return jsonResponse({ ok: true, outcome: 'allowed-once' })
   }
-  if (address.startsWith('/api/ide/plan-mode')) return jsonResponse({ ok: true })
+  if (address.startsWith('/api/ide/plan-mode')) {
+    return jsonResponse({
+      sessionId: 'session-test',
+      planMode: JSON.parse(options.body).enabled,
+    })
+  }
   return jsonResponse({ result: { ok: true, value: {} } })
 }
 
@@ -332,6 +337,42 @@ push('event', {
 })
 await tick()
 assert.ok(thread.textContent.includes('第二条'), 'durable event appended to the transcript')
+
+// Mode switch: Plan → Act must actively tell the model to carry on.
+push('event', {
+  type: 'assistant/message',
+  seq: 2,
+  time: 5,
+  data: { message: { content: [{ type: 'text', text: '# 计划\n1. 先做这个' }] } },
+})
+await tick()
+
+const modeNode = fakeDocument.getElementById('mode')
+const planButton = modeNode.children.find((node) => node.dataset.mode === 'plan')
+const actButton = modeNode.children.find((node) => node.dataset.mode === 'act')
+const clickMode = (node) => {
+  for (const listener of modeNode.listeners.get('click') ?? []) listener({ target: node })
+}
+const promptRequests = () => requests.filter((request) => request.url.startsWith('/api/session/prompt'))
+
+clickMode(planButton)
+await tick(40)
+assert.equal(fakeDocument.getElementById('modeHint').textContent, '只读：写操作会被拒绝', 'Plan hint')
+
+const beforeAct = promptRequests().length
+clickMode(actButton)
+await tick(60)
+assert.equal(fakeDocument.getElementById('modeHint').textContent, '直接执行改动', 'Act hint')
+const afterAct = promptRequests()
+assert.equal(afterAct.length, beforeAct + 1, 'switching to Act sends exactly one continuation prompt')
+assert.ok(afterAct.at(-1).body.includes('模式已切换'), 'continuation prompt names the mode switch')
+assert.ok(afterAct.at(-1).body.includes('执行'), 'continuation prompt asks the model to execute')
+
+const beforePlanAgain = promptRequests().length
+clickMode(planButton)
+await tick(40)
+assert.equal(promptRequests().length, beforePlanAgain, 'switching to Plan does not auto-send')
+await tick(20)
 
 // Approval: the card becomes visible with the tool name.
 push('approval', {

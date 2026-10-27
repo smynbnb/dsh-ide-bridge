@@ -351,6 +351,8 @@ function isInjected(text) {
     || head.startsWith('<available_skills>')
     || head.startsWith('Current runtime context')
     || head.startsWith('Time sampled')
+    // 模式切换时自动发给模型的续跑指令，不是用户手动输入的内容。
+    || head.startsWith('【模式已切换】')
 }
 
 /** 只转义会破坏结构的字符；Markdown 规则随后再套。 */
@@ -1036,14 +1038,7 @@ async function send() {
     // 这里用一条明确的指令约束模型只出方案，服务端另有 tools.guard 硬拦。
     const PLAN_PREFIX = '[只读模式] 本轮只允许读取和分析，不要修改文件或执行写操作。' + String.fromCharCode(10, 10)
     const text2 = planMode ? PLAN_PREFIX + text : text
-    await rpc('session/prompt', {
-      request: {
-        requestId: 'req-' + crypto.randomUUID(),
-        sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: text2 }],
-      },
-    })
+    await promptText(text2)
     input.value = ''
     if (pollTimer !== null) await poll()
   } catch (error) {
@@ -1053,6 +1048,18 @@ async function send() {
     busy = false
     sendBtn.disabled = false
   }
+}
+
+/** One `session/prompt` request; callers own the busy flag. */
+async function promptText(text) {
+  await rpc('session/prompt', {
+    request: {
+      requestId: 'req-' + crypto.randomUUID(),
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text }],
+    },
+  })
 }
 
 let catalog = null
@@ -1161,25 +1168,65 @@ async function pushSelection() {
   }
 }
 
-async function setPlanMode(enabled) {
-  planMode = enabled
+/** Reflect one mode without touching the server. */
+function paintMode(enabled) {
+  for (const item of el('mode').querySelectorAll('button')) {
+    item.classList.toggle('active', (item.dataset.mode === 'plan') === enabled)
+  }
   el('modeHint').textContent = enabled ? '只读：写操作会被拒绝' : '直接执行改动'
+}
+
+async function setPlanMode(enabled) {
+  const wasPlan = planMode
+  paintMode(enabled)
+  let accepted = false
   try {
-    await fetch('/api/ide/plan-mode', {
+    const response = await fetch('/api/ide/plan-mode', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, enabled }),
     })
+    const info = await response.json().catch(() => null)
+    accepted = response.ok && info?.planMode === enabled
   } catch (error) {
     console.warn('plan mode toggle failed', error)
   }
+  if (!accepted) {
+    planMode = wasPlan
+    paintMode(wasPlan)
+    return
+  }
+  planMode = enabled
+
+  // Switching Plan → Act is a request to carry on: the model does not watch
+  // this switch, so without a message it keeps waiting for a spoken "execute".
+  // The prompt is queued, so it also works when the planning turn is still open.
+  if (wasPlan && !enabled && !busy && hasAssistantReply()) {
+    busy = true
+    try {
+      await promptText('【模式已切换】当前会话已从 Plan（计划模式）切换到 Act（执行模式）。'
+        + '请直接执行上一条回复里给出的计划，不要再等待确认。'
+        + '如果没有待执行的计划，只需回复“已切换到 Act 模式”。')
+      if (pollTimer !== null) await poll()
+    } catch (error) {
+      console.warn('act continuation failed', error)
+    } finally {
+      busy = false
+    }
+  }
+}
+
+function hasAssistantReply() {
+  return events.some((event) => {
+    if (event?.type !== 'assistant/message') return false
+    const content = event.data?.message?.content
+    return Array.isArray(content) && content.some((part) => part?.type === 'text' && String(part.text).trim() !== '')
+  })
 }
 
 el('mode').addEventListener('click', (event) => {
   const button = event.target.closest('button')
   if (!button) return
-  for (const item of el('mode').querySelectorAll('button')) item.classList.remove('active')
-  button.classList.add('active')
   setPlanMode(button.dataset.mode === 'plan')
 })
 
