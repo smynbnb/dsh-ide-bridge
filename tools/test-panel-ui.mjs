@@ -386,6 +386,41 @@ await tick()
 assert.ok(thread.textContent.includes('把按钮颜色改一下'), 'plan message text is shown')
 assert.ok(!thread.textContent.includes('只读模式'), 'plan prefix is hidden from the transcript')
 
+// Typed input must suppress the Plan → Act auto-continuation: the user is
+// switching mode in order to send that text, not approving the previous plan.
+const inputNode = fakeDocument.getElementById('input')
+inputNode.value = '把这个按钮改成红色'
+const beforeTypedAct = promptRequests().length
+clickMode(actButton)
+await tick(60)
+assert.equal(promptRequests().length, beforeTypedAct, 'typed input suppresses the auto continuation')
+assert.equal(inputNode.value, '把这个按钮改成红色', 'typed text stays in the composer')
+
+const sendNode = fakeDocument.getElementById('send')
+for (const listener of sendNode.listeners.get('click') ?? []) listener({})
+await tick(60)
+const typedRequest = JSON.parse(promptRequests().at(-1).body).payload.args.request
+assert.equal(typedRequest.mode, 'queue', 'normal send uses queue mode')
+assert.ok(typedRequest.content[0].text.includes('把这个按钮改成红色'), 'typed text is sent after switching')
+assert.ok(!typedRequest.content[0].text.includes('只读模式'), 'Act send does not carry the Plan prefix')
+assert.equal(inputNode.value, '', 'composer clears after send')
+
+// Steer: while a turn is running, the extra button injects into that turn.
+push('event', { type: 'turn/start', seq: 4, time: 7, data: { turn: 1 } })
+await tick()
+assert.equal(fakeDocument.getElementById('steer').disabled, false, 'steer is enabled during a turn')
+inputNode.value = '换个思路，先改标题'
+const beforeSteer = promptRequests().length
+for (const listener of fakeDocument.getElementById('steer').listeners.get('click') ?? []) listener({})
+await tick(60)
+const steerRequest = JSON.parse(promptRequests().at(-1).body).payload.args.request
+assert.equal(promptRequests().length, beforeSteer + 1, 'steer sends one prompt')
+assert.equal(steerRequest.mode, 'steer', 'steer uses steer mode')
+assert.ok(steerRequest.content[0].text.includes('换个思路'), 'steer carries the typed text')
+assert.equal(inputNode.value, '', 'composer clears after steer')
+push('event', { type: 'turn/end', seq: 5, time: 8, data: { turn: 1, reason: 'completed' } })
+await tick()
+
 // Approval: the card becomes visible with the tool name.
 push('approval', {
   id: 'appr-1',

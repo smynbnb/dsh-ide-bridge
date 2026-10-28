@@ -1,6 +1,6 @@
 {
   "name": "dsh-ide-bridge",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Bridges the harness and a JetBrains IDE: publishes the authenticated web URL, registers the open project as a workspace, runs an MCP client that follows the IDE's online state, and serves the side-panel chat UI with live streaming and approval prompts.",
   "type": "module",
   "main": "index.js",

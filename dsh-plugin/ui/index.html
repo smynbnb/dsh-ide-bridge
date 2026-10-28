@@ -225,9 +225,10 @@
     </div>
     <span class="hint" id="modeHint">直接执行改动</span>
   </div>
-  <textarea id="input" placeholder="描述要做什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+  <textarea id="input" placeholder="描述要做什么…（Enter 发送，Shift+Enter 换行，运行中 Ctrl+Enter 插话）"></textarea>
   <div class="actions">
     <span class="spacer"></span>
+    <button class="btn" id="steer" disabled title="在当前回合中插入一条消息，不排队到下一轮（Ctrl+Enter）">插话</button>
     <button class="btn" id="stop" disabled>停止</button>
     <button class="btn primary" id="send">发送</button>
   </div>
@@ -275,6 +276,7 @@ const empty = el('empty')
 const input = el('input')
 const sendBtn = el('send')
 const stopBtn = el('stop')
+const steerBtn = el('steer')
 const statusDot = el('statusDot')
 const sidLabel = el('sid')
 const feedLabel = el('feedLabel')
@@ -302,6 +304,14 @@ let polling = false
 
 function setStatus(kind) {
   statusDot.className = 'dot' + (kind === 'ok' ? ' on' : kind === 'err' ? ' err' : '')
+}
+
+/** Keep the three composer buttons consistent with the turn and RPC state. */
+function updateComposer() {
+  stopBtn.disabled = !turnOpen
+  // 插话只对正在进行的回合有意义；空闲时它等同于普通发送。
+  steerBtn.disabled = !turnOpen || busy
+  sendBtn.disabled = busy
 }
 
 function setFeed(text) {
@@ -773,7 +783,7 @@ function ingest(event) {
   // 最终消息已经落盘，流式块完成使命；否则会和新气泡重复显示。
   if (event.type === 'assistant/message') live = null
 
-  stopBtn.disabled = !turnOpen
+  updateComposer()
   renderThread()
 }
 
@@ -888,7 +898,7 @@ function handleStreamMessage(name, payload) {
     lastSeq = events.reduce((max, event) => Math.max(max, typeof event?.seq === 'number' ? event.seq : -1), -1)
     turnOpen = hasOpenTurn(events)
     live = null
-    stopBtn.disabled = !turnOpen
+    updateComposer()
     stopPolling()
     setStatus('ok')
     setFeed('流式')
@@ -986,7 +996,7 @@ async function poll() {
       if (event.type === 'assistant/message') live = null
       changed = true
     }
-    stopBtn.disabled = !turnOpen
+    updateComposer()
     if (changed) renderThread()
     if (pollTimer !== null) setStatus('ok')
   } catch (error) {
@@ -1027,14 +1037,15 @@ async function ensureSession() {
   sidLabel.textContent = sessionId.slice(-8)
 }
 
-/** 首屏：先拿一次分页快照，旧服务端也能立即显示历史；随后升级到 SSE。 */async function loadInitial() {
+/** 首屏：先拿一次分页快照，旧服务端也能立即显示历史；随后升级到 SSE。 */
+async function loadInitial() {
   setStatus('ok')
   const page = await readPage(sessionId)
   const records = Array.isArray(page?.records) ? page.records : []
   events = records.map((record) => record?.event ?? record).filter(Boolean)
   lastSeq = events.reduce((max, event) => Math.max(max, typeof event?.seq === 'number' ? event.seq : -1), -1)
   turnOpen = hasOpenTurn(events)
-  stopBtn.disabled = !turnOpen
+  updateComposer()
   renderThread()
   connectStream()
   loadModels().catch((error) => console.warn('model catalog failed', error))
@@ -1042,33 +1053,49 @@ async function ensureSession() {
 }
 
 async function send() {
+  await submit('queue')
+}
+
+/** 插话：把这条消息注入正在进行的回合，而不是排队到下一轮。 */
+async function steer() {
+  if (!turnOpen) return
+  await submit('steer')
+}
+
+/**
+ * One prompt submission.
+ *
+ * @param {'queue'|'steer'} mode queue starts/queues a turn; steer injects into
+ *   the running turn so the user can redirect it without waiting.
+ */
+async function submit(mode) {
   const text = input.value.trim()
   if (!text || busy) return
   busy = true
-  sendBtn.disabled = true
+  updateComposer()
   try {
     // Plan 模式没有服务端开关：DSH 的 /plan 是客户端命令，API 不接受。
     // 这里用一条明确的指令约束模型只出方案，服务端另有 tools.guard 硬拦。
     const text2 = planMode ? PLAN_PREFIX + text : text
-    await promptText(text2)
+    await promptText(text2, mode)
     input.value = ''
     if (pollTimer !== null) await poll()
   } catch (error) {
-    console.error('send failed', error)
+    console.error(mode + ' failed', error)
     setStatus('err')
   } finally {
     busy = false
-    sendBtn.disabled = false
+    updateComposer()
   }
 }
 
 /** One `session/prompt` request; callers own the busy flag. */
-async function promptText(text) {
+async function promptText(text, mode = 'queue') {
   await rpc('session/prompt', {
     request: {
       requestId: 'req-' + crypto.randomUUID(),
       sessionId,
-      mode: 'queue',
+      mode,
       content: [{ type: 'text', text }],
     },
   })
@@ -1212,9 +1239,11 @@ async function setPlanMode(enabled) {
 
   // Switching Plan → Act is a request to carry on: the model does not watch
   // this switch, so without a message it keeps waiting for a spoken "execute".
-  // The prompt is queued, so it also works when the planning turn is still open.
-  if (wasPlan && !enabled && !busy && hasAssistantReply()) {
+  // Skip this when the user has already typed something — they are switching
+  // mode in order to send that text, not asking the previous plan to run.
+  if (wasPlan && !enabled && !busy && hasAssistantReply() && input.value.trim() === '') {
     busy = true
+    updateComposer()
     try {
       await promptText('【模式已切换】当前会话已从 Plan（计划模式）切换到 Act（执行模式）。'
         + '请直接执行上一条回复里给出的计划，不要再等待确认。'
@@ -1224,6 +1253,7 @@ async function setPlanMode(enabled) {
       console.warn('act continuation failed', error)
     } finally {
       busy = false
+      updateComposer()
     }
   }
 }
@@ -1253,11 +1283,16 @@ stopBtn.addEventListener('click', async () => {
 })
 
 sendBtn.addEventListener('click', send)
+steerBtn.addEventListener('click', steer)
 input.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    send()
+  if (event.key !== 'Enter' || event.shiftKey) return
+  event.preventDefault()
+  // 运行中 Ctrl/⌘+Enter 插话；空闲时仍按普通发送处理。
+  if ((event.ctrlKey || event.metaKey) && turnOpen) {
+    steer()
+    return
   }
+  send()
 })
 
 // 跟随 IDE 主题：插件会在页面加载后注入真实配色；这里只给
