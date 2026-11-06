@@ -65,6 +65,7 @@ function createHarness() {
       },
     },
     workspaceRegistry: {
+      archivedSessionIds: ['session-archived'],
       async create(cwd) {
         return { id: 'workspace-1', path: cwd }
       },
@@ -224,10 +225,19 @@ function attachSse(response) {
 const harness = createHarness()
 apply(harness.ctx)
 
-assert.equal(harness.routes.size, 6, 'expected six IDE routes')
-for (const path of ['/api/ide-panel', '/api/ide/plan-mode', '/api/ide/context', '/api/ide/stream', '/api/ide/approval', '/api/ide/permission']) {
+assert.equal(harness.routes.size, 7, 'expected seven IDE routes')
+for (const path of ['/api/ide-panel', '/api/ide/plan-mode', '/api/ide/context', '/api/ide/archived', '/api/ide/stream', '/api/ide/approval', '/api/ide/permission']) {
   assert.ok(harness.routes.has(path), `missing route ${path}`)
 }
+
+const archivedResponse = await harness.routes.get('/api/ide/archived').fetch(
+  new Request('http://127.0.0.1/api/ide/archived'),
+)
+assert.deepEqual(
+  (await archivedResponse.json()).archivedSessionIds,
+  ['session-archived'],
+  'archived route returns the workspace archive set',
+)
 
 // --- SSE: snapshot, durable event, assistant frame -------------------------
 

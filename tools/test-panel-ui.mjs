@@ -225,6 +225,9 @@ const fetchMock = async (url, options = {}) => {
     const sessionId = createdSessions === 1 ? 'session-test' : 'session-test-' + createdSessions
     return jsonResponse({ result: { ok: true, value: { sessionId } } })
   }
+  if (address.startsWith('/api/ide/archived')) {
+    return jsonResponse({ archivedSessionIds: ['session-test-2'] })
+  }
   if (address.startsWith('/api/session/list')) {
     return jsonResponse({
       result: {
@@ -489,6 +492,10 @@ clickNode(sessionBtnNode)
 await tick(80)
 assert.ok(sessionDropNode.classList.contains('open'), 'session menu opens')
 assert.ok(sessionListNode.children.length >= 1, 'recent sessions are listed')
+assert.ok(
+  !sessionListNode.children.some((node) => node.textContent.includes('新对话')),
+  'archived session is hidden from the recent list',
+)
 
 const createRequests = () => requests.filter((request) => request.url.startsWith('/api/session/create'))
 const beforeNew = createRequests().length

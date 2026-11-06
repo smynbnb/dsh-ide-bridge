@@ -56,6 +56,9 @@ const APPROVAL_PATH = '/api/ide/approval'
 /** Reads and changes the panel session's permission preset. */
 const PERMISSION_PATH = '/api/ide/permission'
 
+/** Archived session ids of the workspace, used to hide them in the panel. */
+const ARCHIVED_PATH = '/api/ide/archived'
+
 /** Keeps an idle EventSource (and its Chromium socket) out of proxy timeouts. */
 const HEARTBEAT_MS = 15_000
 
@@ -337,8 +340,16 @@ export function apply(ctx) {
       }
     }
 
-    const servePlan = async (request) => {
-      let body
+    /**
+     * Archived session ids of the current workspace. The panel filters its
+     * recent-session list with this, so sessions archived in the desktop UI are
+     * hidden too — not just the ones archived from the panel.
+     */
+    const serveArchived = async () => json({
+      archivedSessionIds: [...(registry.archivedSessionIds ?? [])],
+    })
+
+    const servePlan = async (request) => {      let body
       try {
         body = await request.json()
       } catch {
@@ -547,6 +558,12 @@ export function apply(ctx) {
         fetch: serveContext,
       })
       ctx.connection.registerFetchRoute(ctx, {
+        path: ARCHIVED_PATH,
+        methods: ['GET'],
+        requestBody: 'buffered',
+        fetch: serveArchived,
+      })
+      ctx.connection.registerFetchRoute(ctx, {
         path: STREAM_PATH,
         methods: ['GET'],
         requestBody: 'buffered',
@@ -564,7 +581,7 @@ export function apply(ctx) {
         requestBody: 'buffered',
         fetch: servePermission,
       })
-      console.log('[dsh-ide-ui] routes registered:', PAGE_PATH, PLAN_PATH, CONTEXT_PATH, STREAM_PATH, APPROVAL_PATH, PERMISSION_PATH)
+      console.log('[dsh-ide-ui] routes registered:', PAGE_PATH, PLAN_PATH, CONTEXT_PATH, ARCHIVED_PATH, STREAM_PATH, APPROVAL_PATH, PERMISSION_PATH)
   } catch (error) {
     console.error('[dsh-ide-ui] route registration failed', error)
   }

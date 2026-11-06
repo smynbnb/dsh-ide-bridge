@@ -1,9 +1,13 @@
 package dsh.web.plugin;
 
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.actionSystem.AnActionEvent;
+import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
+import com.intellij.openapi.actionSystem.ex.ComboBoxAction;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.project.DumbAwareAction;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.wm.ToolWindow;
@@ -111,9 +115,11 @@ public final class DshWebToolWindowFactory implements ToolWindowFactory {
         chatContent.setCloseable(false);
         toolWindow.getContentManager().addContent(chatContent);
 
-        // Header button + gear menu: reload the active tab.
+        // Header dropdown: pick the DSH panel or the pinned chat page; the
+        // reload button still reloads whichever is active.
         ReloadPageAction reload = new ReloadPageAction();
-        toolWindow.setTitleActions(List.of(reload));
+        PanelSwitcher switcher = new PanelSwitcher(toolWindow, content, chatContent);
+        toolWindow.setTitleActions(List.of(switcher, reload));
         toolWindow.setAdditionalGearActions(new DefaultActionGroup(reload));
 
         // Publish the project path for the harness-side MCP proxy. The startup
@@ -301,6 +307,53 @@ public final class DshWebToolWindowFactory implements ToolWindowFactory {
         private static String manualUrl() {
             String value = System.getProperty(URL_PROPERTY);
             return value == null || value.isBlank() ? null : value.trim();
+        }
+    }
+
+    /**
+     * Tool-window header dropdown: both contents live in the same tool window,
+     * but the pinned chat tab is a hover-expanding strip that is easy to miss.
+     * This gives one always-visible selector for the two panels.
+     */
+    private static final class PanelSwitcher extends ComboBoxAction {
+
+        private final ToolWindow toolWindow;
+        private final Content harness;
+        private final Content chat;
+
+        PanelSwitcher(ToolWindow toolWindow, Content harness, Content chat) {
+            this.toolWindow = toolWindow;
+            this.harness = harness;
+            this.chat = chat;
+        }
+
+        @Override
+        public void update(@NotNull AnActionEvent event) {
+            Content selected = toolWindow.getContentManager().getSelectedContent();
+            event.getPresentation().setText(selected == chat ? "DeepSeek Chat" : "DeepSeek Harness");
+            event.getPresentation().setDescription("切换 DeepSeek Harness 面板和 DeepSeek Chat 网页");
+            event.getPresentation().setEnabledAndVisible(true);
+        }
+
+        @Override
+        protected @NotNull DefaultActionGroup createPopupActionGroup(@NotNull JComponent button,
+                                                                     @NotNull DataContext dataContext) {
+            DefaultActionGroup group = new DefaultActionGroup();
+            group.add(new DumbAwareAction("DeepSeek Harness") {
+                @Override
+                public void actionPerformed(@NotNull AnActionEvent event) {
+                    toolWindow.getContentManager().setSelectedContent(harness, true);
+                    toolWindow.activate(null, true);
+                }
+            });
+            group.add(new DumbAwareAction("DeepSeek Chat") {
+                @Override
+                public void actionPerformed(@NotNull AnActionEvent event) {
+                    toolWindow.getContentManager().setSelectedContent(chat, true);
+                    toolWindow.activate(null, true);
+                }
+            });
+            return group;
         }
     }
 }

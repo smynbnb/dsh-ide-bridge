@@ -346,12 +346,30 @@ function loadArchivedIds() {
   }
 }
 
+/** Archive set from the workspace registry: includes sessions archived in the desktop UI too. */
+let serverArchivedIds = new Set()
+
 function rememberArchived(sessionId) {
   archivedIds.add(sessionId)
+  serverArchivedIds.add(sessionId)
   try {
     localStorage.setItem(archivedKey, JSON.stringify([...archivedIds]))
   } catch {
     // Storage can be unavailable in private mode; the in-memory set still works.
+  }
+}
+
+async function refreshArchivedIds() {
+  try {
+    const response = await fetch('/api/ide/archived')
+    if (!response.ok) return
+    const data = await response.json()
+    serverArchivedIds = new Set(
+      Array.isArray(data?.archivedSessionIds) ? data.archivedSessionIds : [],
+    )
+  } catch (error) {
+    // Older servers lack the route; the locally remembered set still works.
+    console.warn('archived sessions failed', error)
   }
 }
 
@@ -1222,11 +1240,12 @@ async function refreshSessionList() {
   loading.textContent = '加载中…'
   sessionList.appendChild(loading)
   try {
+    await refreshArchivedIds()
     const list = await rpc('session/list', { _request: {} })
     const items = (Array.isArray(list?.items) ? list.items : [])
       .filter((item) => item && typeof item.sessionId === 'string' && sameProject(item))
       .filter((item) => item.origin !== 'subagent')
-      .filter((item) => item.sessionId === sessionId || !archivedIds.has(item.sessionId))
+      .filter((item) => !archivedIds.has(item.sessionId) && !serverArchivedIds.has(item.sessionId))
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
       .slice(0, 8)
     sessionList.innerHTML = ''
