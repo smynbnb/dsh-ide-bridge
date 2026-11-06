@@ -252,6 +252,20 @@ const fetchMock = async (url, options = {}) => {
     return jsonResponse({ result: { ok: true, value: { archivedSessionIds: [] } } })
   }
   if (address.startsWith('/api/session/page')) {
+    const body = JSON.parse(options.body)
+    const throughSeq = body?.payload?.args?.request?.throughSeq
+    if (typeof throughSeq === 'number' && throughSeq > 2) {
+      // DSH 0.2.2 wording; the old panel only matched "cursor N".
+      return jsonResponse({
+        result: {
+          ok: false,
+          error: {
+            code: 'gateway/bad-request',
+            message: `session history cut ${throughSeq} exceeds 2`,
+          },
+        },
+      })
+    }
     return jsonResponse({
       result: {
         ok: true,
