@@ -261,12 +261,20 @@ function createPanelHub() {
   }
 }
 
+/**
+ * Resolve every service before `apply` runs.
+ *
+ * A static inject list makes the loader wait, instead of relying on the
+ * `ctx.inject` callbacks being re-run when a service appears later (which,
+ * under DSH 0.2.2's profile composition, could leave the routes unregistered).
+ */
+export const inject = ['tools', 'connection', 'workspaceRegistry', 'sessions']
+
 export function apply(ctx) {
   // Enforce at the tool boundary: a denial here cannot be overridden later in
   // the pipeline, and the model sees the reason as the tool's failure.
-  ctx.inject(['tools'], (toolsCtx) => {
-    toolsCtx.effect(() => {
-      const dispose = toolsCtx.tools.guard((execution) => {
+  ctx.effect(() => {
+    const dispose = ctx.tools.guard((execution) => {
         // Only the session whose panel is in Plan mode is restricted; other
         // sessions (and subagents without an agent) keep full access.
         const sessionId = execution.agent?.id
@@ -278,10 +286,9 @@ export function apply(ctx) {
         }
         return '计划模式已开启：当前只允许只读操作。请先切回 Act 模式再执行写操作或命令。'
       })
-      console.log('[dsh-ide-ui] plan-mode guard registered')
-      return () => dispose()
-    }, 'dsh-ide-ui: plan mode guard')
-  })
+    console.log('[dsh-ide-ui] plan-mode guard registered')
+    return () => dispose()
+  }, 'dsh-ide-ui: plan mode guard')
 
   const hub = createPanelHub()
 
@@ -301,9 +308,8 @@ export function apply(ctx) {
     console.log('[dsh-ide-ui] panel hub disposed')
   }, 'dsh-ide-ui: panel approvals')
 
-  ctx.inject(['connection', 'workspaceRegistry', 'sessions'], (connectionCtx) => {
-    const registry = connectionCtx.workspaceRegistry
-    const sessions = connectionCtx.sessions
+  const registry = ctx.workspaceRegistry
+  const sessions = ctx.sessions
 
     const servePage = async () => new Response(readPage(), {
       headers: {
@@ -477,7 +483,7 @@ export function apply(ctx) {
     const servePermission = async (request) => {
       // Optional capability: a composition without the preset service keeps the
       // panel working, it just hides the picker (the route answers 501).
-      const permissionPresets = connectionCtx.get('permissionPresets')
+      const permissionPresets = ctx.get('permissionPresets')
       if (permissionPresets === undefined) {
         return json({ error: 'permission presets are not composed in this profile' }, 501)
       }
@@ -522,45 +528,44 @@ export function apply(ctx) {
     }
 
     try {
-      connectionCtx.connection.registerFetchRoute(connectionCtx, {
+      ctx.connection.registerFetchRoute(ctx, {
         path: PAGE_PATH,
         methods: ['GET'],
         requestBody: 'buffered',
         fetch: servePage,
       })
-      connectionCtx.connection.registerFetchRoute(connectionCtx, {
+      ctx.connection.registerFetchRoute(ctx, {
         path: PLAN_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
         fetch: servePlan,
       })
-      connectionCtx.connection.registerFetchRoute(connectionCtx, {
+      ctx.connection.registerFetchRoute(ctx, {
         path: CONTEXT_PATH,
         methods: ['GET'],
         requestBody: 'buffered',
         fetch: serveContext,
       })
-      connectionCtx.connection.registerFetchRoute(connectionCtx, {
+      ctx.connection.registerFetchRoute(ctx, {
         path: STREAM_PATH,
         methods: ['GET'],
         requestBody: 'buffered',
         fetch: serveStream,
       })
-      connectionCtx.connection.registerFetchRoute(connectionCtx, {
+      ctx.connection.registerFetchRoute(ctx, {
         path: APPROVAL_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
         fetch: serveDecision,
       })
-      connectionCtx.connection.registerFetchRoute(connectionCtx, {
+      ctx.connection.registerFetchRoute(ctx, {
         path: PERMISSION_PATH,
         methods: ['GET', 'POST'],
         requestBody: 'buffered',
         fetch: servePermission,
       })
       console.log('[dsh-ide-ui] routes registered:', PAGE_PATH, PLAN_PATH, CONTEXT_PATH, STREAM_PATH, APPROVAL_PATH, PERMISSION_PATH)
-    } catch (error) {
-      console.error('[dsh-ide-ui] route registration failed', error)
-    }
-  })
+  } catch (error) {
+    console.error('[dsh-ide-ui] route registration failed', error)
+  }
 }

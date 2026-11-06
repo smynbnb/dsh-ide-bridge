@@ -27,10 +27,20 @@
  *    is enough, no manual workspace picker step.
  */
 
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export const name = 'dsh-ide-bridge'
+
+/**
+ * Resolve every service before `apply` runs.
+ *
+ * The previous version called `ctx.inject` from inside `apply`; that depends on
+ * the loader's order and, since DSH 0.2.2, can leave the callback waiting
+ * forever when the profile is composed differently (the bridge file silently
+ * disappears). A static inject list makes the loader itself wait.
+ */
+export const inject = ['connection', 'webServer', 'workspaceRegistry']
 
 /** Bumped together with the reader's BridgeConfig when the contract changes. */
 const SCHEMA = 1
@@ -117,67 +127,78 @@ function log(message, error) {
 }
 
 export function apply(ctx, config = {}) {
-  ctx.inject(['connection', 'webServer'], (webCtx) => {
-    const target = resolveTarget(config)
-    const startedAt = Date.now()
+  const target = resolveTarget(config)
+  const startedAt = Date.now()
 
-    const publish = () => {
-      const origin = webCtx.webServer.getOrigin()
-      const url = webCtx.connection.authenticatedUrl(origin)
-      writeAtomically(target, {
-        schema: SCHEMA,
-        url,
-        pid: process.pid,
-        startedAt,
-        version: VERSION,
-        updatedAt: Date.now(),
-      })
+  const publish = () => {
+    const origin = ctx.webServer.getOrigin()
+    const url = ctx.connection.authenticatedUrl(origin)
+    writeAtomically(target, {
+      schema: SCHEMA,
+      url,
+      pid: process.pid,
+      startedAt,
+      version: VERSION,
+      updatedAt: Date.now(),
+    })
+  }
+
+  log('plugin loaded')
+
+  // Publish on load, then repair the file if something else removes it (a
+  // profile reload used to delete the hand-off without a replacement).
+  ctx.effect(() => {
+    try {
+      publish()
+    } catch (error) {
+      // A missing file only degrades the editor side to "desktop not
+      // running"; it must never take the harness down.
+      log('cannot publish hand-off file', error)
     }
-
-    webCtx.effect(() => {
+    const timer = setInterval(() => {
       try {
-        publish()
+        if (!existsSync(target)) publish()
       } catch (error) {
-        // A missing file only degrades the editor side to "desktop not
-        // running"; it must never take the harness down.
-        log('cannot publish hand-off file', error)
+        log('cannot republish hand-off file', error)
       }
-      return () => removeQuietly(target)
-    }, 'dsh-ide-bridge: hand-off file')
-  })
+    }, 15_000)
+    timer.unref?.()
+    return () => {
+      clearInterval(timer)
+      removeQuietly(target)
+    }
+  }, 'dsh-ide-bridge: hand-off file')
 
   // Register the IDE's project as a workspace. `create` returns the existing
   // record for a known directory, so polling is cheap; only a directory the
   // registry has never seen becomes a new, first-listed workspace.
-  ctx.inject(['workspaceRegistry'], (wsCtx) => {
-    let lastAttempt = null
-    let syncing = false
+  let lastAttempt = null
+  let syncing = false
 
-    const sync = async () => {
-      if (syncing) return
-      const path = readProjectPath()
-      if (path === null || path === lastAttempt) return
-      syncing = true
-      lastAttempt = path
-      try {
-        const project = await wsCtx.workspaceRegistry.create(path)
-        log(`workspace ready for IDE project: ${project?.path ?? path}`)
-      } catch (error) {
-        // Retry next tick: the directory may be mid-rename during a checkout.
-        lastAttempt = null
-        log(`workspace registration failed for ${path}`, error)
-      } finally {
-        syncing = false
-      }
+  const sync = async () => {
+    if (syncing) return
+    const path = readProjectPath()
+    if (path === null || path === lastAttempt) return
+    syncing = true
+    lastAttempt = path
+    try {
+      const project = await ctx.workspaceRegistry.create(path)
+      log(`workspace ready for IDE project: ${project?.path ?? path}`)
+    } catch (error) {
+      // Retry next tick: the directory may be mid-rename during a checkout.
+      lastAttempt = null
+      log(`workspace registration failed for ${path}`, error)
+    } finally {
+      syncing = false
     }
+  }
 
-    wsCtx.effect(() => {
-      const timer = setInterval(() => {
-        sync().catch((error) => log('workspace sync failed', error))
-      }, PROJECT_POLL_MS)
-      timer.unref?.()
-      sync().catch((error) => log('initial workspace sync failed', error))
-      return () => clearInterval(timer)
-    }, 'dsh-ide-bridge: workspace sync')
-  })
+  ctx.effect(() => {
+    const timer = setInterval(() => {
+      sync().catch((error) => log('workspace sync failed', error))
+    }, PROJECT_POLL_MS)
+    timer.unref?.()
+    sync().catch((error) => log('initial workspace sync failed', error))
+    return () => clearInterval(timer)
+  }, 'dsh-ide-bridge: workspace sync')
 }

@@ -66,7 +66,7 @@
   .dot { width:6px; height:6px; border-radius:50%; background:#9ca3af; flex:0 0 auto; }
   .dot.on { background:#22c55e; }
   .dot.err { background:#ef4444; }
-  .project { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .project { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .topbar .spacer { flex:1; }
   .topbar .feed { font-size:10.5px; opacity:.65; }
 
@@ -187,6 +187,31 @@
   .approval .btn.allow { background:var(--accent-fill); border-color:var(--accent-fill); color:var(--on-accent); }
   .approval .btn:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
   .approval-note { font-size:11px; color:var(--text-dim); }
+
+  /* 会话菜单：新建 / 归档并新建 / 最近会话 */
+  .chip { border:1px solid var(--border); background:var(--bg-raised); color:var(--text-dim);
+    border-radius:6px; padding:2px 8px; font:inherit; font-size:11.5px; cursor:pointer; }
+  .chip:hover { color:var(--text); border-color:var(--accent); }
+  .session-drop { position:relative; flex:0 0 auto; }
+  .session-menu { position:absolute; top:100%; right:0; margin-top:4px; min-width:260px;
+    max-height:60vh; overflow:auto; display:none; padding:4px; z-index:60;
+    background:var(--bg-raised); border:1px solid var(--border); border-radius:8px;
+    box-shadow:0 6px 20px rgba(0,0,0,.25); }
+  .session-drop.open .session-menu { display:block; }
+  .session-menu > button { display:block; width:100%; text-align:left; border:0; background:transparent;
+    color:var(--text); font:inherit; font-size:12px; padding:6px 8px; border-radius:5px; cursor:pointer; }
+  .session-menu > button:hover { background:var(--accent-soft); }
+  .session-sep { height:1px; background:var(--border); margin:4px 0; }
+  .session-label { font-size:10.5px; color:var(--text-dim); padding:4px 8px; }
+  .session-list { display:flex; flex-direction:column; }
+  .session-item { display:flex; justify-content:space-between; gap:10px; align-items:baseline;
+    width:100%; border:0; background:transparent; color:var(--text); font:inherit; font-size:12px;
+    text-align:left; padding:6px 8px; border-radius:5px; cursor:pointer; }
+  .session-item:hover { background:var(--accent-soft); }
+  .session-item.active .title { color:var(--accent); }
+  .session-item .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .session-item .time { flex:0 0 auto; font-size:10.5px; color:var(--text-dim); }
+  .session-empty { padding:6px 8px; font-size:11px; color:var(--text-dim); }
 </style>
 </head>
 <body>
@@ -194,6 +219,16 @@
 <header class="topbar">
   <span class="dot" id="statusDot"></span>
   <span class="project" id="projectName">…</span>
+  <div class="session-drop" id="sessionDrop">
+    <button type="button" class="chip" id="sessionBtn" title="新建或切换会话">会话 ▾</button>
+    <div class="session-menu" id="sessionMenu">
+      <button type="button" data-action="new">＋ 新建会话</button>
+      <button type="button" data-action="archive-new">归档当前并新建</button>
+      <div class="session-sep"></div>
+      <div class="session-label">最近会话</div>
+      <div class="session-list" id="sessionList"></div>
+    </div>
+  </div>
   <span class="spacer"></span>
   <span class="feed" id="feedLabel"></span>
 </header>
@@ -280,6 +315,10 @@ const steerBtn = el('steer')
 const statusDot = el('statusDot')
 const sidLabel = el('sid')
 const feedLabel = el('feedLabel')
+const sessionDrop = el('sessionDrop')
+const sessionBtn = el('sessionBtn')
+const sessionMenu = el('sessionMenu')
+const sessionList = el('sessionList')
 
 el('projectName').textContent = projectName
 
@@ -290,6 +329,31 @@ let lastSeq = -1
 let turnOpen = false
 let busy = false
 let planMode = false
+/** Workspace backing this project, resolved once per boot. */
+let workspaceId = null
+/** True while a create/switch is in flight. */
+let sessionBusy = false
+/** Sessions archived from this panel; hidden from the recent list. */
+const archivedKey = 'dsh-ide-archived:' + cwd
+const archivedIds = new Set(loadArchivedIds())
+
+function loadArchivedIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(archivedKey) || '[]')
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function rememberArchived(sessionId) {
+  archivedIds.add(sessionId)
+  try {
+    localStorage.setItem(archivedKey, JSON.stringify([...archivedIds]))
+  } catch {
+    // Storage can be unavailable in private mode; the in-memory set still works.
+  }
+}
 
 /** One live assistant attempt, folded from `agent/assistant-stream` frames. */
 let live = null
@@ -1015,19 +1079,24 @@ function sessionKey() {
   return 'dsh-ide-session:' + cwd
 }
 
+async function resolveWorkspace() {
+  try {
+    const info = await fetch('/api/ide/context?cwd=' + encodeURIComponent(cwd)).then((r) => r.json())
+    workspaceId = info?.workspaceId ?? null
+  } catch (error) {
+    console.warn('workspace resolve failed', error)
+    workspaceId = null
+  }
+  return workspaceId
+}
+
 async function ensureSession() {
+  await resolveWorkspace()
   const saved = localStorage.getItem(sessionKey())
   if (saved) {
     sessionId = saved
   } else {
     // 用 workspaceId 建会话，会话才会归到项目分组下；只传 cwd 会落到「未分组」。
-    let workspaceId = null
-    try {
-      const info = await fetch('/api/ide/context?cwd=' + encodeURIComponent(cwd)).then((r) => r.json())
-      workspaceId = info?.workspaceId ?? null
-    } catch (error) {
-      console.warn('workspace resolve failed', error)
-    }
     const created = await rpc('session/create', {
       request: workspaceId ? { workspaceId } : { cwd },
     })
@@ -1050,6 +1119,154 @@ async function loadInitial() {
   connectStream()
   loadModels().catch((error) => console.warn('model catalog failed', error))
   loadPermission()
+}
+
+/**
+ * 在同一标签页里切换会话：停掉旧 SSE、清空状态、重新拉历史并连新流。
+ * 不刷新页面，也不需要重启 IDE/DSH。
+ */
+async function switchSession(nextId) {
+  if (typeof nextId !== 'string' || nextId === '' || nextId === sessionId) return
+  if (streamAbort !== null) {
+    streamAbort.abort()
+    streamAbort = null
+  }
+  streamGeneration += 1
+  stopPolling()
+  sessionId = nextId
+  localStorage.setItem(sessionKey(), sessionId)
+  sidLabel.textContent = sessionId.slice(-8)
+  events = []
+  lastSeq = -1
+  turnOpen = false
+  live = null
+  approvals.length = 0
+  renderApproval()
+  planMode = false
+  paintMode(false)
+  renderThread()
+  updateComposer()
+  await loadInitial()
+}
+
+/**
+ * 新会话：可选先归档当前会话。归档会停掉当前回合（stopActivity），
+ * 不归档时也会取消仍在跑的回合，避免旧会话继续消耗 token。
+ */
+async function startNewSession(archiveCurrent) {
+  if (sessionBusy) return
+  sessionBusy = true
+  closeSessionMenu()
+  try {
+    if (archiveCurrent) {
+      try {
+        await rpc('workspace/archiveSession', {
+          request: { sessionId, stopActivity: true },
+        })
+        rememberArchived(sessionId)
+      } catch (error) {
+        // 归档失败不应阻止用户开新会话，旧会话仍保留。
+        console.warn('archive failed', error)
+      }
+    } else if (turnOpen) {
+      try {
+        await rpc('session/cancel', { request: { sessionId } })
+      } catch (error) {
+        console.warn('cancel before new session failed', error)
+      }
+    }
+    const created = await rpc('session/create', {
+      request: workspaceId ? { workspaceId } : { cwd },
+    })
+    await switchSession(created.sessionId)
+    setStatus('ok')
+  } catch (error) {
+    console.error('new session failed', error)
+    setStatus('err')
+  } finally {
+    sessionBusy = false
+  }
+}
+
+function normalizePath(value) {
+  return String(value ?? '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function sameProject(item) {
+  return normalizePath(item?.cwd) === normalizePath(cwd)
+}
+
+function relativeTime(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
+  const pad = (value) => String(value).padStart(2, '0')
+  const date = new Date(ms)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) {
+    return pad(date.getHours()) + ':' + pad(date.getMinutes())
+  }
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (date.toDateString() === yesterday.toDateString()) return '昨天'
+  return pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+}
+
+async function refreshSessionList() {
+  sessionList.innerHTML = ''
+  const loading = document.createElement('div')
+  loading.className = 'session-empty'
+  loading.textContent = '加载中…'
+  sessionList.appendChild(loading)
+  try {
+    const list = await rpc('session/list', { _request: {} })
+    const items = (Array.isArray(list?.items) ? list.items : [])
+      .filter((item) => item && typeof item.sessionId === 'string' && sameProject(item))
+      .filter((item) => item.origin !== 'subagent')
+      .filter((item) => item.sessionId === sessionId || !archivedIds.has(item.sessionId))
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+      .slice(0, 8)
+    sessionList.innerHTML = ''
+    if (items.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'session-empty'
+      empty.textContent = '还没有会话'
+      sessionList.appendChild(empty)
+      return
+    }
+    for (const item of items) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'session-item' + (item.sessionId === sessionId ? ' active' : '')
+      const title = document.createElement('span')
+      title.className = 'title'
+      title.textContent = item.projections?.values?.title ?? '未命名会话'
+      const time = document.createElement('span')
+      time.className = 'time'
+      time.textContent = relativeTime(item.updatedAt)
+      button.append(title, time)
+      button.addEventListener('click', (event) => {
+        event.stopPropagation()
+        closeSessionMenu()
+        switchSession(item.sessionId)
+      })
+      sessionList.appendChild(button)
+    }
+  } catch (error) {
+    console.warn('session list failed', error)
+    sessionList.innerHTML = ''
+    const failed = document.createElement('div')
+    failed.className = 'session-empty'
+    failed.textContent = '无法读取会话列表'
+    sessionList.appendChild(failed)
+  }
+}
+
+function openSessionMenu() {
+  sessionDrop.classList.add('open')
+  refreshSessionList()
+}
+
+function closeSessionMenu() {
+  sessionDrop.classList.remove('open')
 }
 
 async function send() {
@@ -1284,6 +1501,24 @@ stopBtn.addEventListener('click', async () => {
 
 sendBtn.addEventListener('click', send)
 steerBtn.addEventListener('click', steer)
+sessionBtn.addEventListener('click', (event) => {
+  event.stopPropagation()
+  if (sessionDrop.classList.contains('open')) closeSessionMenu()
+  else openSessionMenu()
+})
+sessionMenu.addEventListener('click', (event) => {
+  const action = event.target.closest('button[data-action]')
+  if (!action) return
+  event.stopPropagation()
+  if (action.dataset.action === 'new') startNewSession(false)
+  else if (action.dataset.action === 'archive-new') startNewSession(true)
+})
+document.addEventListener('click', (event) => {
+  if (!sessionDrop.contains(event.target)) closeSessionMenu()
+})
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeSessionMenu()
+})
 input.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' || event.shiftKey) return
   event.preventDefault()

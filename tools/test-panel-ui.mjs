@@ -127,6 +127,7 @@ class FakeNode {
       if (selector === 'button') return node.tagName === 'BUTTON'
       if (selector === 'button.active') return node.tagName === 'BUTTON' && node.classList.contains('active')
       if (selector === 'button[data-value]') return node.tagName === 'BUTTON' && 'value' in node.dataset
+      if (selector === 'button[data-action]') return node.tagName === 'BUTTON' && 'action' in node.dataset
       return false
     }
     const walk = (node) => {
@@ -146,6 +147,7 @@ class FakeNode {
     while (node !== null) {
       if (selector === 'button' && node.tagName === 'BUTTON') return node
       if (selector === 'button[data-value]' && node.tagName === 'BUTTON' && 'value' in node.dataset) return node
+      if (selector === 'button[data-action]' && node.tagName === 'BUTTON' && 'action' in node.dataset) return node
       node = node.parent
     }
     return null
@@ -170,6 +172,13 @@ for (const effort of ['low', 'medium', 'high', 'max']) {
   const button = new FakeNode('button')
   button.dataset.value = effort
   nodes.get('effortMenu').appendChild(button)
+}
+// The session menu's action buttons are markup children without ids.
+for (const [action, label] of [['new', '＋ 新建会话'], ['archive-new', '归档当前并新建']]) {
+  const button = new FakeNode('button')
+  button.dataset.action = action
+  button.textContent = label
+  nodes.get('sessionMenu').appendChild(button)
 }
 
 const fakeDocument = {
@@ -199,6 +208,7 @@ const fakeDocument = {
 const approvals = []
 const requests = []
 let streamController
+let createdSessions = 0
 const encoder = new TextEncoder()
 
 const jsonResponse = (body) => new Response(JSON.stringify(body), {
@@ -211,7 +221,35 @@ const fetchMock = async (url, options = {}) => {
   requests.push({ url: address, method: options.method ?? 'GET', body: options.body })
   if (address.startsWith('/api/ide/context')) return jsonResponse({ workspaceId: 'workspace-1', path: 'C:/work' })
   if (address.startsWith('/api/session/create')) {
-    return jsonResponse({ result: { ok: true, value: { sessionId: 'session-test' } } })
+    createdSessions += 1
+    const sessionId = createdSessions === 1 ? 'session-test' : 'session-test-' + createdSessions
+    return jsonResponse({ result: { ok: true, value: { sessionId } } })
+  }
+  if (address.startsWith('/api/session/list')) {
+    return jsonResponse({
+      result: {
+        ok: true,
+        value: {
+          items: [
+            {
+              sessionId: 'session-test',
+              updatedAt: Date.now() - 60_000,
+              cwd: 'C:/work',
+              projections: { values: { title: '旧对话' } },
+            },
+            {
+              sessionId: 'session-test-2',
+              updatedAt: Date.now(),
+              cwd: 'C:/work',
+              projections: { values: { title: '新对话' } },
+            },
+          ],
+        },
+      },
+    })
+  }
+  if (address.startsWith('/api/workspace/archiveSession')) {
+    return jsonResponse({ result: { ok: true, value: { archivedSessionIds: [] } } })
   }
   if (address.startsWith('/api/session/page')) {
     return jsonResponse({
@@ -420,6 +458,50 @@ assert.ok(steerRequest.content[0].text.includes('换个思路'), 'steer carries 
 assert.equal(inputNode.value, '', 'composer clears after steer')
 push('event', { type: 'turn/end', seq: 5, time: 8, data: { turn: 1, reason: 'completed' } })
 await tick()
+
+// Session menu: create/switch/archive without reloading the page.
+const clickNode = (node, target = node) => {
+  for (const listener of node.listeners.get('click') ?? []) {
+    listener({ target, stopPropagation() {} })
+  }
+}
+const sessionDropNode = fakeDocument.getElementById('sessionDrop')
+const sessionBtnNode = fakeDocument.getElementById('sessionBtn')
+const sessionMenuNode = fakeDocument.getElementById('sessionMenu')
+const sessionListNode = fakeDocument.getElementById('sessionList')
+const sessionStorageKey = 'dsh-ide-session:C:\\work'
+
+clickNode(sessionBtnNode)
+await tick(80)
+assert.ok(sessionDropNode.classList.contains('open'), 'session menu opens')
+assert.ok(sessionListNode.children.length >= 1, 'recent sessions are listed')
+
+const createRequests = () => requests.filter((request) => request.url.startsWith('/api/session/create'))
+const beforeNew = createRequests().length
+const newAction = sessionMenuNode.children.find((node) => node.dataset.action === 'new')
+clickNode(sessionMenuNode, newAction)
+await tick(160)
+assert.equal(createRequests().length, beforeNew + 1, 'new session creates one session')
+assert.equal(storage.get(sessionStorageKey), 'session-test-2', 'panel switched to the new session')
+assert.ok(
+  requests.some((request) => request.url.includes('/api/ide/stream?sessionId=session-test-2')),
+  'SSE reconnects to the new session',
+)
+
+clickNode(sessionBtnNode)
+await tick(80)
+const archiveAction = sessionMenuNode.children.find((node) => node.dataset.action === 'archive-new')
+const beforeArchive = requests.filter((request) => request.url.startsWith('/api/workspace/archiveSession')).length
+const beforeArchiveNew = createRequests().length
+clickNode(sessionMenuNode, archiveAction)
+await tick(200)
+const archiveRequests = requests.filter((request) => request.url.startsWith('/api/workspace/archiveSession'))
+assert.equal(archiveRequests.length, beforeArchive + 1, 'archive current calls workspace/archiveSession')
+const archiveBody = JSON.parse(archiveRequests.at(-1).body).payload.args.request
+assert.equal(archiveBody.sessionId, 'session-test-2', 'archive targets the current session')
+assert.equal(archiveBody.stopActivity, true, 'archive stops running work')
+assert.equal(createRequests().length, beforeArchiveNew + 1, 'archive-and-new creates a session')
+assert.equal(storage.get(sessionStorageKey), 'session-test-3', 'panel switched to the archived run successor')
 
 // Approval: the card becomes visible with the tool name.
 push('approval', {
