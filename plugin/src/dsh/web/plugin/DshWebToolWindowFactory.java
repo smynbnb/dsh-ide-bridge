@@ -1,27 +1,24 @@
 package dsh.web.plugin;
 
 import com.intellij.openapi.Disposable;
-import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
-import com.intellij.openapi.actionSystem.ex.ComboBoxAction;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.project.DumbAwareAction;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowFactory;
-import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
 import com.intellij.ui.jcef.JBCefBrowser;
+import com.intellij.util.ui.JBUI;
 import org.cef.browser.CefBrowser;
 import org.cef.browser.CefFrame;
 import org.cef.handler.CefLoadHandlerAdapter;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
 import java.awt.BorderLayout;
@@ -73,6 +70,9 @@ public final class DshWebToolWindowFactory implements ToolWindowFactory {
     /** Project -> live chat (chat.deepseek.com) browser of the pinned tab. */
     private static final Map<Project, JBCefBrowser> CHAT_BROWSERS = new ConcurrentHashMap<>();
 
+    /** Project -> whether the chat card (rather than the DSH panel) is showing. */
+    private static final Map<Project, Boolean> CHAT_SELECTED = new ConcurrentHashMap<>();
+
     /** Returns the live WebUI browser of the given project's tool window, if any. */
     @Nullable
     public static JBCefBrowser browserFor(@Nullable Project project) {
@@ -80,18 +80,13 @@ public final class DshWebToolWindowFactory implements ToolWindowFactory {
     }
 
     /**
-     * Returns the browser of the currently selected tab of the tool window
-     * (the chat tab if it is selected, otherwise the WebUI tab), if any.
+     * Returns the browser of the currently showing card: the chat page when the
+     * selector is on “DeepSeek Chat”, the DSH panel otherwise.
      */
     @Nullable
     public static JBCefBrowser activeBrowser(@NotNull Project project) {
-        ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID);
-        if (toolWindow != null) {
-            Content selected = toolWindow.getContentManager().getSelectedContent();
-            JBCefBrowser chat = CHAT_BROWSERS.get(project);
-            if (selected != null && chat != null && selected.getComponent() == chat.getComponent()) {
-                return chat;
-            }
+        if (Boolean.TRUE.equals(CHAT_SELECTED.get(project))) {
+            return CHAT_BROWSERS.get(project);
         }
         return BROWSERS.get(project);
     }
@@ -101,25 +96,45 @@ public final class DshWebToolWindowFactory implements ToolWindowFactory {
         Controller controller = new Controller(project);
         Disposer.register(project, controller);
 
-        Content content = ContentFactory.getInstance()
-                .createContent(controller.component(), "DeepSeek Harness", false);
-        toolWindow.getContentManager().addContent(content);
-
-        // Pinned chat tab: always present next to the WebUI, not closeable.
+        // One content, one selector: the two cards are the DSH panel and the
+        // pinned chat page. Keeping them as separate tool-window tabs made the
+        // header overflow into IDEA's “hidden tabs” chevron and squeezed the
+        // DeepSeek Harness tab out.
         JBCefBrowser chat = new JBCefBrowser(CHAT_URL);
         CHAT_BROWSERS.put(project, chat);
+        CHAT_SELECTED.put(project, false);
         Disposer.register(project, chat);
-        Disposer.register(project, () -> CHAT_BROWSERS.remove(project));
-        Content chatContent = ContentFactory.getInstance()
-                .createContent(chat.getComponent(), CHAT_TAB_NAME, false);
-        chatContent.setCloseable(false);
-        toolWindow.getContentManager().addContent(chatContent);
+        Disposer.register(project, () -> {
+            CHAT_BROWSERS.remove(project);
+            CHAT_SELECTED.remove(project);
+        });
 
-        // Header dropdown: pick the DSH panel or the pinned chat page; the
-        // reload button still reloads whichever is active.
+        JComboBox<String> selector = new JComboBox<>(new String[]{"DeepSeek Harness", CHAT_TAB_NAME});
+        selector.setMaximumRowCount(2);
+        JPanel selectorRow = new JPanel(new BorderLayout());
+        selectorRow.setBorder(JBUI.Borders.empty(4, 8));
+        selectorRow.add(selector, BorderLayout.WEST);
+
+        JPanel cards = new JPanel(new CardLayout());
+        cards.add(controller.component(), "harness");
+        cards.add(chat.getComponent(), "chat");
+        selector.addActionListener(event -> {
+            boolean chatSelected = selector.getSelectedIndex() == 1;
+            CHAT_SELECTED.put(project, chatSelected);
+            ((CardLayout) cards.getLayout()).show(cards, chatSelected ? "chat" : "harness");
+        });
+
+        JPanel root = new JPanel(new BorderLayout());
+        root.add(selectorRow, BorderLayout.NORTH);
+        root.add(cards, BorderLayout.CENTER);
+
+        Content content = ContentFactory.getInstance()
+                .createContent(root, "DeepSeek Harness", false);
+        content.setCloseable(false);
+        toolWindow.getContentManager().addContent(content);
+
         ReloadPageAction reload = new ReloadPageAction();
-        PanelSwitcher switcher = new PanelSwitcher(toolWindow, content, chatContent);
-        toolWindow.setTitleActions(List.of(switcher, reload));
+        toolWindow.setTitleActions(List.of(reload));
         toolWindow.setAdditionalGearActions(new DefaultActionGroup(reload));
 
         // Publish the project path for the harness-side MCP proxy. The startup
@@ -310,50 +325,4 @@ public final class DshWebToolWindowFactory implements ToolWindowFactory {
         }
     }
 
-    /**
-     * Tool-window header dropdown: both contents live in the same tool window,
-     * but the pinned chat tab is a hover-expanding strip that is easy to miss.
-     * This gives one always-visible selector for the two panels.
-     */
-    private static final class PanelSwitcher extends ComboBoxAction {
-
-        private final ToolWindow toolWindow;
-        private final Content harness;
-        private final Content chat;
-
-        PanelSwitcher(ToolWindow toolWindow, Content harness, Content chat) {
-            this.toolWindow = toolWindow;
-            this.harness = harness;
-            this.chat = chat;
-        }
-
-        @Override
-        public void update(@NotNull AnActionEvent event) {
-            Content selected = toolWindow.getContentManager().getSelectedContent();
-            event.getPresentation().setText(selected == chat ? "DeepSeek Chat" : "DeepSeek Harness");
-            event.getPresentation().setDescription("切换 DeepSeek Harness 面板和 DeepSeek Chat 网页");
-            event.getPresentation().setEnabledAndVisible(true);
-        }
-
-        @Override
-        protected @NotNull DefaultActionGroup createPopupActionGroup(@NotNull JComponent button,
-                                                                     @NotNull DataContext dataContext) {
-            DefaultActionGroup group = new DefaultActionGroup();
-            group.add(new DumbAwareAction("DeepSeek Harness") {
-                @Override
-                public void actionPerformed(@NotNull AnActionEvent event) {
-                    toolWindow.getContentManager().setSelectedContent(harness, true);
-                    toolWindow.activate(null, true);
-                }
-            });
-            group.add(new DumbAwareAction("DeepSeek Chat") {
-                @Override
-                public void actionPerformed(@NotNull AnActionEvent event) {
-                    toolWindow.getContentManager().setSelectedContent(chat, true);
-                    toolWindow.activate(null, true);
-                }
-            });
-            return group;
-        }
-    }
 }
