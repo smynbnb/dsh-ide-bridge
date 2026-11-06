@@ -1,0 +1,45 @@
+{
+  "name": "dsh-ide-bridge",
+  "version": "0.5.6",
+  "description": "Bridges DeepSeek Harness and a JetBrains IDE: registers the open project, exposes the IDE MCP relay, publishes the authenticated DSH URL, and serves the side-panel chat UI.",
+  "type": "module",
+  "main": "dsh-plugin/index.js",
+  "exports": {
+    ".": "./dsh-plugin/index.js",
+    "./mcp": "./dsh-plugin/mcp-bridge.js",
+    "./ui": "./dsh-plugin/ui-server.js"
+  },
+  "files": [
+    "dsh-plugin/index.js",
+    "dsh-plugin/mcp-bridge.js",
+    "dsh-plugin/ui-server.js",
+    "dsh-plugin/ui/",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=20",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smynbnb/dsh-ide-bridge.git"
+  },
+  "homepage": "https://github.com/smynbnb/dsh-ide-bridge",
+  "bugs": {
+    "url": "https://github.com/smynbnb/dsh-ide-bridge/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "jetbrains",
+    "intellij",
+    "ide",
+    "mcp"
+  ]
+}

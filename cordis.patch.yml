@@ -1,0 +1,14 @@
+# DeepSeek Harness side of the JetBrains bridge.
+#
+# Installing this package through `dsh plugin --profile <name> add ...` applies
+# this patch, so no manual cordis.patch.yml edit is needed:
+#   - the host plugin publishes bridge.json and registers the IDE project
+#   - the MCP relay follows the IDE's online state
+#   - the panel UI serves /api/ide-panel and the approval/permission routes
+- insert:
+    - id: dsh-ide-bridge
+      name: dsh-ide-bridge
+    - id: dsh-ide-mcp
+      name: dsh-ide-bridge/mcp
+    - id: dsh-ide-ui
+      name: dsh-ide-bridge/ui
