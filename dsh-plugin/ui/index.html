@@ -361,7 +361,9 @@ function rememberArchived(sessionId) {
 
 async function refreshArchivedIds() {
   try {
-    const response = await fetch('/api/ide/archived')
+    // The route was added after the first DSH 0.2.2 restart; a cached 404 or a
+    // stale response would leave the filter empty, so bypass the cache.
+    const response = await fetch('/api/ide/archived?t=' + Date.now(), { cache: 'no-store' })
     if (!response.ok) return
     const data = await response.json()
     serverArchivedIds = new Set(
@@ -1242,10 +1244,13 @@ async function refreshSessionList() {
   try {
     await refreshArchivedIds()
     const list = await rpc('session/list', { _request: {} })
-    const items = (Array.isArray(list?.items) ? list.items : [])
+    const candidates = (Array.isArray(list?.items) ? list.items : [])
       .filter((item) => item && typeof item.sessionId === 'string' && sameProject(item))
       .filter((item) => item.origin !== 'subagent')
+    const active = candidates
       .filter((item) => !archivedIds.has(item.sessionId) && !serverArchivedIds.has(item.sessionId))
+    const hiddenCount = candidates.length - active.length
+    const items = active
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
       .slice(0, 8)
     sessionList.innerHTML = ''
@@ -1273,6 +1278,12 @@ async function refreshSessionList() {
         switchSession(item.sessionId)
       })
       sessionList.appendChild(button)
+    }
+    if (hiddenCount > 0) {
+      const note = document.createElement('div')
+      note.className = 'session-empty'
+      note.textContent = `已隐藏 ${hiddenCount} 个归档会话`
+      sessionList.appendChild(note)
     }
   } catch (error) {
     console.warn('session list failed', error)
