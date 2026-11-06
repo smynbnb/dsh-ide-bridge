@@ -1,11 +1,11 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!-- DeepSeek Harness Bridge: points the IDE tool window at the running desktop
      instance by reading %LOCALAPPDATA%\dsh-ide-bridge\bridge.json.
      Derived from github.com/Chocomintopia/dsh-jetbrains-plugin (MIT). -->
 <idea-plugin>
   <id>dsh.web.bridge</id>
   <name>DeepSeek Harness Bridge</name>
-  <version>1.0.5</version>
+  <version>1.0.6</version>
   <vendor url="https://github.com/Chocomintopia/dsh-jetbrains-plugin">dsh-ide-bridge fork</vendor>
   <description><![CDATA[
     <p>Docks the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>
@@ -44,7 +44,7 @@
     </ul>
     <h3>1.0.2</h3>
     <ul>
-      <li>The IDE panel now follows the actual IDE theme 鈥?Islands, Darcula, IntelliJ Light, High Contrast and custom themes 鈥?by sampling the live look-and-feel colors instead of guessing light/dark.</li>
+      <li>The IDE panel now follows the actual IDE theme — Islands, Darcula, IntelliJ Light, High Contrast and custom themes — by sampling the live look-and-feel colors instead of guessing light/dark.</li>
       <li>Theme and editor color scheme changes apply to an open panel immediately.</li>
       <li>The panel uses the IDE UI font and editor font family, and gets a stronger focus ring under high-contrast themes.</li>
     </ul>
@@ -82,10 +82,9 @@
 
     <!-- Sends the editor selection into the DSH composer as a file reference. -->
     <action id="dsh.web.bridge.sendSelection" class="dsh.web.plugin.SendSelectionAction"
-            text="鍙戦€侀€変腑浠ｇ爜鍒?DSH"
-            description="鎶婂綋鍓嶉€変腑鐨勪唬鐮佷綔涓烘枃浠跺紩鐢ㄦ彃鍏?DeepSeek Harness 杈撳叆妗?>
+            text="发送选中代码到 DSH"
+            description="把当前选中的代码作为文件引用插入 DeepSeek Harness 输入框">
       <add-to-group group-id="EditorPopupMenu" anchor="first" />
     </action>
   </actions>
 </idea-plugin>
-
